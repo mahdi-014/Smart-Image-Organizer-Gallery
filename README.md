@@ -46,12 +46,23 @@ python scripts/scan.py "C:\Path\To\Your\Images"
 pytest -v
 ```
 
+### 5. Start the Local API Server
+Start the local FastAPI development server:
+```powershell
+.\venv\Scripts\python.exe -m uvicorn backend.api.app:app --host 127.0.0.1 --port 8000 --reload
+```
+Once the server is running, access:
+- **Health Check Endpoint:** [http://127.0.0.1:8000/api/health](http://127.0.0.1:8000/api/health)
+- **Interactive API Documentation (Swagger UI):** [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)
+
 ---
 
 ## Project Structure
 ```text
 .
 ├── backend/
+│   ├── api/
+│   │   └── app.py             # FastAPI application and route endpoints
 │   ├── core/
 │   │   ├── hasher.py          # Streaming SHA-256 cryptographic hasher
 │   │   ├── metadata.py        # EXIF parser & WebP thumbnail generator
