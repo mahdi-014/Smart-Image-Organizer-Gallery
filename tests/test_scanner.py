@@ -228,5 +228,70 @@ def test_scan_directory_traversal_error_reporting(tmp_path: Path, temp_db: Path,
         assert images[0]["file_name"] == "good.jpg"
 
 
+def test_scan_corrupt_image_rejection_and_mixed_scan(tmp_path: Path, temp_db: Path):
+    """
+    Verifies that when a folder contains both valid and corrupt image files:
+    1. The corrupt file is rejected and excluded from the catalog.
+    2. error_count is incremented and an informative error is recorded.
+    3. The valid file is successfully cataloged.
+    4. processed_count only counts successfully cataloged images.
+    """
+    from PIL import Image
+
+    # 1. Valid image
+    valid_file = tmp_path / "valid_landscape.png"
+    Image.new("RGB", (200, 200), "green").save(valid_file)
+
+    # 2. Corrupt image file (supported extension, invalid byte contents)
+    corrupt_file = tmp_path / "broken_image.jpg"
+    corrupt_file.write_bytes(b"corrupt junk data that cannot be parsed as jpeg")
+
+    progress = scan_directory(str(tmp_path), db_path=temp_db)
+
+    assert progress.is_complete is True
+    assert progress.total_found == 2
+    assert progress.processed_count == 1
+    assert progress.error_count == 1
+
+    assert len(progress.errors) == 1
+    assert "broken_image.jpg" in progress.errors[0]
+
+    with db_session(temp_db) as conn:
+        assert repository.count_images(conn) == 1
+        images = repository.list_images(conn)
+        assert images[0]["file_name"] == "valid_landscape.png"
+
+
+def test_scan_thumbnail_failure_rejects_catalog_record(tmp_path: Path, temp_db: Path, monkeypatch):
+    """
+    Verifies that if thumbnail generation fails (returns None):
+    1. The image is NOT inserted into the database.
+    2. processed_count is NOT incremented.
+    3. error_count is incremented once with an informative message.
+    """
+    from PIL import Image
+    import backend.core.scanner as scanner_module
+
+    # Valid image on disk
+    valid_file = tmp_path / "photo_needs_thumb.jpg"
+    Image.new("RGB", (150, 150), "yellow").save(valid_file)
+
+    # Monkeypatch generate_thumbnail in scanner to return None
+    monkeypatch.setattr(scanner_module, "generate_thumbnail", lambda *args, **kwargs: None)
+
+    progress = scan_directory(str(tmp_path), db_path=temp_db)
+
+    assert progress.is_complete is True
+    assert progress.total_found == 1
+    assert progress.processed_count == 0
+    assert progress.error_count == 1
+    assert len(progress.errors) == 1
+    assert "Failed to generate thumbnail for photo_needs_thumb.jpg" in progress.errors[0]
+
+    with db_session(temp_db) as conn:
+        assert repository.count_images(conn) == 0
+
+
+
 
 

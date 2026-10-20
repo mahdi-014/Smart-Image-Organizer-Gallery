@@ -61,6 +61,10 @@ def extract_metadata(file_path: Union[str, Path]) -> Dict[str, Any]:
     """
     Reads image dimensions, format, file stats, and EXIF tags.
     Does NOT modify the file. Opens strictly in read mode.
+
+    Raises:
+        OSError: If the file cannot be opened, identified, or decoded by Pillow.
+        ValueError: If image dimensions are non-positive (corrupt header).
     """
     path = Path(file_path)
     stat = path.stat()
@@ -68,18 +72,20 @@ def extract_metadata(file_path: Union[str, Path]) -> Dict[str, Any]:
     file_size = stat.st_size
     date_modified = datetime.fromtimestamp(stat.st_mtime).isoformat()
     date_taken = None
-    width = 0
-    height = 0
-    file_format = path.suffix.lstrip(".").upper()
     exif_tags: Dict[str, Any] = {}
 
-    try:
-        with Image.open(path) as img:
-            width, height = img.size
-            if img.format:
-                file_format = img.format.upper()
+    # Open the image to read headers and basic dimensions.
+    # Note: Image.open() is lazy and does not decode full pixel data into memory.
+    with Image.open(path) as img:
+        width, height = img.size
+        if width <= 0 or height <= 0:
+            raise ValueError(f"Invalid image dimensions ({width}x{height}) in {path.name}")
 
-            # Extract EXIF if available
+        file_format = img.format.upper() if img.format else path.suffix.lstrip(".").upper()
+
+        # Defensively extract EXIF tags (optional metadata).
+        # Missing, empty, or unparseable EXIF must not cause an otherwise valid image to fail.
+        try:
             raw_exif = img.getexif()
             if raw_exif:
                 for tag_id, value in raw_exif.items():
@@ -98,10 +104,9 @@ def extract_metadata(file_path: Union[str, Path]) -> Dict[str, Any]:
                         pass
 
                 date_taken = parse_exif_date(str(dt_raw)) if dt_raw else None
-
-    except Exception:
-        # Fallback if image has corrupt headers or cannot be decoded
-        pass
+        except Exception:
+            # Corrupted EXIF data does not invalidate a decodable image
+            pass
 
     # If no EXIF date taken exists, fallback to file modification timestamp
     if not date_taken:

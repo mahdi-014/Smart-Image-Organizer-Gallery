@@ -89,3 +89,34 @@ def test_metadata_and_thumbnails_extended_formats(tmp_path: Path):
             assert thumb.height <= 300
 
 
+def test_extract_metadata_invalid_image_raises(tmp_path: Path):
+    """
+    Verifies that extract_metadata raises an exception for unreadable or corrupt
+    image files rather than silently returning 0x0 placeholder dimensions.
+    """
+    import pytest
+
+    corrupt_file = tmp_path / "corrupt.jpg"
+    corrupt_file.write_bytes(b"corrupt header and payload content that is not an image")
+
+    with pytest.raises(Exception):
+        extract_metadata(corrupt_file)
+
+
+def test_extract_metadata_exif_resilience(tmp_path: Path):
+    """
+    Verifies that images with missing or empty EXIF metadata succeed
+    and extract valid dimensions without raising errors.
+    """
+    img_path = tmp_path / "plain_photo.png"
+    # Create plain PNG with no EXIF
+    Image.new("RGB", (250, 180), "blue").save(img_path)
+
+    meta = extract_metadata(img_path)
+    assert meta["width"] == 250
+    assert meta["height"] == 180
+    assert meta["file_format"] == "PNG"
+    assert meta["date_taken"] is not None
+
+
+

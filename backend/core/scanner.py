@@ -105,10 +105,13 @@ def scan_directory(
                 sha256 = compute_sha256(file_path)
                 # Perceptual hash deferred to Milestone 5
                 phash = None
-                # Metadata (dimensions, format, dates)
+                # Metadata (dimensions, format, dates) - raises if corrupt or unreadable
                 meta = extract_metadata(file_path)
-                # WebP thumbnail
+
+                # WebP thumbnail - must succeed before inserting catalog record
                 thumb_path = generate_thumbnail(file_path, sha256)
+                if not thumb_path:
+                    raise RuntimeError(f"Failed to generate thumbnail for {file_path.name}")
 
                 record: Dict[str, Any] = {
                     "file_path": meta["file_path"],
