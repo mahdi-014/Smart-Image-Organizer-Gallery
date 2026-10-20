@@ -5,13 +5,13 @@ A local-first, privacy-respecting Windows desktop application designed to organi
 ## Current Status: Milestone 1 Completed (Image Scanner & Metadata Catalog)
 
 ### Verified Features in Milestone 1:
-- **Recursive Read-Only Scanner:** Scans folders and nested subfolders while strictly guaranteeing original source files are never altered, moved, or deleted.
+- **Recursive Read-Only Scanner:** Scans folders and nested subfolders while strictly guaranteeing original source files are never altered, moved, or deleted. Supports JPG, JPEG, PNG, WEBP, BMP, GIF, TIF, and TIFF formats (case-insensitive) with top-down traversal that prunes ignored directories (`.git`, `venv`, `node_modules`, `__pycache__`), captures filesystem traversal errors, and rejects corrupt or unreadable files without halting accessible processing.
 - **Streaming SHA-256 Hasher:** Computes cryptographic byte checksums in 64 KB chunks to guarantee minimal RAM usage on large image files.
-- **Metadata & EXIF Extractor:** Safely extracts dimensions, formats, and auto-rotates smartphone photos using EXIF orientation tags.
+- **Metadata & EXIF Extractor:** Safely extracts dimensions, formats, and auto-rotates smartphone photos using EXIF orientation tags. For animated GIFs and multi-page TIFFs, the primary (first) frame/page is indexed.
 - **WebP Thumbnail Cache:** Generates lightweight 300x300 WebP thumbnails indexed by file hash.
 - **SQLite Database with WAL Mode:** Concurrent read/write catalog with full indexing and idempotent upsert queries.
 - **Exact Duplicate Detection:** Groups identical image files across different folders via SHA-256 hash matching.
-- **Automated Test Suite:** 10/10 automated tests passing with pytest.
+- **Automated Test Suite:** Comprehensive pytest suite verifying all scanner, hasher, metadata, and database operations.
 
 > Note: Perceptual similarity detection (dHash/pHash) is planned for Milestone 5, Web Gallery UI for Milestone 2, and AI classification for Milestones 3 & 4.
 
