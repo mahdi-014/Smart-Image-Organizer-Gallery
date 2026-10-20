@@ -23,8 +23,12 @@ DATABASE_PATH = DATA_DIR / "gallery.db"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 THUMBNAILS_DIR.mkdir(parents=True, exist_ok=True)
 
-# Image Scanning Filters
-SUPPORTED_EXTENSIONS: Set[str] = {".jpg", ".jpeg", ".png", ".webp"}
+# Image Scanning Filters (case-insensitive)
+# Supports standard web formats and legacy/uncompressed formats
+SUPPORTED_EXTENSIONS: Set[str] = {
+    ".jpg", ".jpeg", ".png", ".webp",
+    ".bmp", ".gif", ".tif", ".tiff"
+}
 
 # Thumbnail Configuration
 THUMBNAIL_MAX_SIZE = (300, 300)

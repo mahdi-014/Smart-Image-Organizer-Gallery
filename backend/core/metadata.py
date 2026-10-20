@@ -12,6 +12,9 @@ Concepts Explained for Beginners:
 3. WebP Thumbnail Optimization:
    - Modern WebP format offers 30% smaller file sizes than JPEG with better clarity.
    - We generate thumbnails keyed by the file's SHA-256 hash. This means identical images share the same cached thumbnail!
+4. Multi-frame & Multi-page Formats (Animated GIF & Multi-page TIFF):
+   - By default, Pillow decodes the first frame (frame 0) or first page.
+   - The initial cataloging indexes the primary static frame for dimensions and thumbnail generation.
 """
 
 from pathlib import Path
