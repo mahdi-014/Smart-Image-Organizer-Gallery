@@ -17,6 +17,9 @@ Concepts Explained for Beginners:
    - Uses os.walk(topdown=True) and modifies dirnames in-place (dirs[:] = [...]).
    - This prevents os.walk from ever descending into ignored folders like .git, venv,
      or node_modules, saving thousands of disk operations on large collections.
+6. Traversal Error Handling:
+   - Uses os.walk(onerror=...) to capture filesystem errors (such as PermissionError
+     or inaccessible directories) so they are reported rather than silently skipped.
 """
 
 import os
@@ -71,8 +74,16 @@ def scan_directory(
         return progress
 
     # 1. First pass: Collect all candidates matching image extensions using pruned top-down traversal
+    def on_walk_error(err: OSError) -> None:
+        progress.error_count += 1
+        err_path = getattr(err, "filename", None) or str(root_path)
+        err_msg = err.strerror or str(err)
+        progress.errors.append(f"Directory traversal error accessing '{err_path}': {err_msg}")
+        if progress_callback:
+            progress_callback(progress)
+
     candidates: List[Path] = []
-    for root, dirs, files in os.walk(str(root_path), topdown=True, followlinks=False):
+    for root, dirs, files in os.walk(str(root_path), topdown=True, onerror=on_walk_error, followlinks=False):
         # In-place directory pruning: os.walk only recurses into directories that remain in dirs
         dirs[:] = [d for d in dirs if d.lower() not in IGNORED_DIR_NAMES]
 

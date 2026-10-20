@@ -168,4 +168,65 @@ def test_directory_pruning_and_traversal_prevention(tmp_path: Path, temp_db: Pat
     assert "nested_subfolder" in visited_names
 
 
+def test_scan_directory_traversal_error_reporting(tmp_path: Path, temp_db: Path, monkeypatch):
+    """
+    Verifies that when a directory traversal error occurs (e.g. PermissionError):
+    1. The onerror callback captures the error and increments error_count.
+    2. An informative error message with the affected path is recorded in progress.errors.
+    3. Other accessible directories and valid images continue to be processed.
+    4. The database catalogs accessible images without interruption.
+    """
+    import os
+    from PIL import Image
+
+    # 1. Accessible directory with a valid image
+    accessible_dir = tmp_path / "accessible"
+    accessible_dir.mkdir()
+    Image.new("RGB", (100, 100), "green").save(accessible_dir / "good.jpg")
+
+    # 2. Locked directory (simulated PermissionError)
+    locked_dir = tmp_path / "locked"
+    locked_dir.mkdir()
+    Image.new("RGB", (100, 100), "red").save(locked_dir / "unreachable.jpg")
+
+    # Monkeypatch os.walk to trigger onerror when encountering 'locked'
+    real_os_walk = os.walk
+
+    def faulty_walk(top, topdown=True, onerror=None, followlinks=False):
+        for root, dirs, files in real_os_walk(top, topdown=topdown, onerror=onerror, followlinks=followlinks):
+            if "locked" in dirs:
+                dirs.remove("locked")
+                if onerror is not None:
+                    # Simulate PermissionError on the locked folder
+                    simulated_err = PermissionError(13, "Access is denied", str(locked_dir))
+                    onerror(simulated_err)
+            yield root, dirs, files
+
+    monkeypatch.setattr(os, "walk", faulty_walk)
+
+    progress = scan_directory(str(tmp_path), db_path=temp_db)
+
+    # Scan must complete gracefully
+    assert progress.is_complete is True
+
+    # Accessible image was discovered and cataloged
+    assert progress.total_found == 1
+    assert progress.processed_count == 1
+
+    # Traversal error was captured and recorded
+    assert progress.error_count == 1
+    assert len(progress.errors) == 1
+    error_msg = progress.errors[0]
+    assert "Directory traversal error" in error_msg
+    assert "locked" in error_msg
+    assert "Access is denied" in error_msg
+
+    # Database contains only the accessible image
+    with db_session(temp_db) as conn:
+        assert repository.count_images(conn) == 1
+        images = repository.list_images(conn)
+        assert images[0]["file_name"] == "good.jpg"
+
+
+
 
