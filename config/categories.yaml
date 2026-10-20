@@ -1,0 +1,73 @@
+# Configurable Category Taxonomy for Smart Image Organizer
+# Each category defines:
+#   code_name: Unique internal machine identifier
+#   display_name: User-friendly label shown in the UI
+#   description: Explanatory text for the user
+#   text_prompt: Anchor sentence for zero-shot vision matching
+
+categories:
+  - code_name: products_ecommerce
+    display_name: Products and E-commerce
+    description: Commercial product photos, packaging, retail merchandise on plain backgrounds.
+    text_prompt: "a photo of a commercial product, item for sale, packaging, merchandise on white background"
+
+  - code_name: ai_covers_thumbnails
+    display_name: AI Covers and Thumbnails
+    description: Stylized digital artwork, dramatic video thumbnails, and generative art.
+    text_prompt: "a stylized digital art cover, dramatic YouTube thumbnail, futuristic concept art, AI generated artwork"
+
+  - code_name: people_portraits
+    display_name: People and Portraits
+    description: Photographs of individuals, portraits, faces, and group gatherings.
+    text_prompt: "a portrait photograph of people, a man, a woman, face close-up, group of people"
+
+  - code_name: screenshots_ui
+    display_name: Screenshots and UI
+    description: Desktop screen captures, mobile app interfaces, and software windows.
+    text_prompt: "a computer desktop screenshot, smartphone screen capture, web page user interface, software application window"
+
+  - code_name: documents_scans
+    display_name: Documents and Scans
+    description: Paper documents, receipts, invoices, letters, and printed forms.
+    text_prompt: "a scanned paper document, text receipt, printed invoice, legal contract, paper sheet with text"
+
+  - code_name: social_media_designs
+    display_name: Social Media Designs
+    description: Promotional graphics, banners, story templates, and flyer designs.
+    text_prompt: "a social media banner, promotional graphic template, Instagram story graphic with text overlay"
+
+  - code_name: graphics_illustrations
+    display_name: Graphics and Illustrations
+    description: Flat vector illustrations, digital clip art, drawings, and cartoons.
+    text_prompt: "a flat vector illustration, digital drawing, clip art, cartoon graphic, decorative artwork"
+
+  - code_name: food_cooking
+    display_name: Food and Cooking
+    description: Dishes, baked goods, plated meals, beverages, and recipes.
+    text_prompt: "a delicious food dish, cooked meal, restaurant dining plate, fresh bakery, beverage recipe"
+
+  - code_name: animals_nature
+    display_name: Animals and Nature
+    description: Pets, wildlife, plants, flowers, forests, mountains, and natural landscapes.
+    text_prompt: "a wild animal, domestic pet, dog, cat, natural landscape, forest, mountains, flowers and plants"
+
+  - code_name: places_travel
+    display_name: Places and Travel
+    description: City skylines, landmarks, architecture, outdoor travel destinations.
+    text_prompt: "a city skyline, famous architectural landmark, tourist attraction, travel landscape, exterior building"
+
+  - code_name: logos_icons
+    display_name: Logos and Icons
+    description: Brand marks, app icons, vector glyphs, and corporate emblems.
+    text_prompt: "a corporate logo, brand symbol, minimalist app icon, vector emblem on plain background"
+
+  - code_name: memes_quotes
+    display_name: Memes and Quotes
+    description: Humorous internet memes, captioned images, and inspirational typography quotes.
+    text_prompt: "an internet meme with funny caption, humorous viral image, inspirational quote with typography"
+
+  - code_name: other
+    display_name: Other
+    description: Miscellaneous images that do not fit cleanly into any of the standard categories.
+    text_prompt: "a miscellaneous uncategorized picture or abstract graphic"
+
