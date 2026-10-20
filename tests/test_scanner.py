@@ -94,3 +94,78 @@ def test_scan_extended_formats_and_case_insensitivity(tmp_path: Path, temp_db: P
         assert "TIFF" in formats
 
 
+def test_directory_pruning_and_traversal_prevention(tmp_path: Path, temp_db: Path, monkeypatch):
+    """
+    Verifies that:
+    1. os.walk genuinely prunes ignored directories in-place and never visits them.
+    2. Case-insensitive directory names (e.g., VENV, .GIT) are pruned.
+    3. Legitimate nested directories are traversed.
+    4. Images in ignored directories never enter the database catalog.
+    """
+    import os
+    from PIL import Image
+
+    # A. Legitimate directory structure
+    valid_dir = tmp_path / "valid_photos"
+    nested_valid_dir = valid_dir / "nested_subfolder"
+    nested_valid_dir.mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", (100, 100), "red").save(valid_dir / "pic1.jpg")
+    Image.new("RGB", (100, 100), "green").save(nested_valid_dir / "pic2.png")
+    (valid_dir / "readme.txt").write_text("Ignore text", encoding="utf-8")
+
+    # B. Ignored directory structures (lowercase & uppercase)
+    ignored_specs = [
+        tmp_path / ".git" / "hooks",
+        tmp_path / "venv" / "Lib" / "site-packages",
+        tmp_path / "__pycache__",
+        tmp_path / "node_modules" / "express",
+        tmp_path / "VENV" / "nested",
+        tmp_path / ".GIT" / "objects",
+    ]
+    for p in ignored_specs:
+        p.mkdir(parents=True, exist_ok=True)
+        Image.new("RGB", (100, 100), "black").save(p / "should_never_be_scanned.jpg")
+
+    # Instrument os.walk to record every directory root visited during traversal
+    visited_roots = []
+    real_os_walk = os.walk
+
+    def tracking_walk(top, topdown=True, onerror=None, followlinks=False):
+        for root, dirs, files in real_os_walk(top, topdown=topdown, onerror=onerror, followlinks=followlinks):
+            visited_roots.append(Path(root))
+            yield root, dirs, files
+
+    monkeypatch.setattr(os, "walk", tracking_walk)
+
+    # Run the scanner
+    progress = scan_directory(str(tmp_path), db_path=temp_db)
+
+    # 1. Total found & processed should be exactly 2 (the two legitimate images)
+    assert progress.is_complete is True
+    assert progress.total_found == 2
+    assert progress.processed_count == 2
+    assert progress.error_count == 0
+
+    # 2. Verify in SQLite that only legitimate images were cataloged
+    with db_session(temp_db) as conn:
+        assert repository.count_images(conn) == 2
+        images = repository.list_images(conn)
+        cataloged_names = {img["file_name"] for img in images}
+        assert cataloged_names == {"pic1.jpg", "pic2.png"}
+
+    # 3. VERIFY PRUNING: None of the ignored directories or their subdirectories were ever visited!
+    # Convert all visited paths to lower-case parts for inspection
+    for visited_path in visited_roots:
+        parts_lower = [part.lower() for part in visited_path.parts]
+        assert ".git" not in parts_lower, f"os.walk visited ignored directory: {visited_path}"
+        assert "venv" not in parts_lower, f"os.walk visited ignored directory: {visited_path}"
+        assert "__pycache__" not in parts_lower, f"os.walk visited ignored directory: {visited_path}"
+        assert "node_modules" not in parts_lower, f"os.walk visited ignored directory: {visited_path}"
+
+    # 4. Confirm that legitimate nested directories WERE visited
+    visited_names = {p.name for p in visited_roots}
+    assert "valid_photos" in visited_names
+    assert "nested_subfolder" in visited_names
+
+
+

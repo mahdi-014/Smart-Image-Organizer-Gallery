@@ -13,8 +13,13 @@ Concepts Explained for Beginners:
 4. Progress Reporting:
    - Dispatches callbacks with live counts (processed, errors, skipped) so web UI
      can show real-time progress bars.
+5. Top-Down Traversal with Directory Pruning:
+   - Uses os.walk(topdown=True) and modifies dirnames in-place (dirs[:] = [...]).
+   - This prevents os.walk from ever descending into ignored folders like .git, venv,
+     or node_modules, saving thousands of disk operations on large collections.
 """
 
+import os
 from pathlib import Path
 from typing import Optional, Callable, Dict, Any, List, Set
 from pydantic import BaseModel
@@ -65,14 +70,16 @@ def scan_directory(
             progress_callback(progress)
         return progress
 
-    # 1. First pass: Collect all candidates matching image extensions
+    # 1. First pass: Collect all candidates matching image extensions using pruned top-down traversal
     candidates: List[Path] = []
-    for item in root_path.rglob("*"):
-        # Skip blacklisted directories
-        if any(part.lower() in IGNORED_DIR_NAMES for part in item.parts):
-            continue
-        if item.is_file() and item.suffix.lower() in extensions:
-            candidates.append(item)
+    for root, dirs, files in os.walk(str(root_path), topdown=True, followlinks=False):
+        # In-place directory pruning: os.walk only recurses into directories that remain in dirs
+        dirs[:] = [d for d in dirs if d.lower() not in IGNORED_DIR_NAMES]
+
+        for file_name in files:
+            file_path = Path(root) / file_name
+            if file_path.suffix.lower() in extensions:
+                candidates.append(file_path)
 
     progress.total_found = len(candidates)
     if progress_callback:
