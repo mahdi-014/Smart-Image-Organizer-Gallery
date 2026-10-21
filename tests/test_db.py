@@ -55,3 +55,22 @@ def test_upsert_and_retrieve_image(temp_db: Path):
         assert fetched["file_size"] == 1024
         assert fetched["file_hash_sha256"] == "fake_hash_12345"
 
+
+def test_sqlite_desc_null_ordering(temp_db: Path):
+    """
+    Empirically proves SQLite's default behavior for NULL values when sorting DESC.
+    Demonstrates that in SQLite: NULL < any non-NULL value,
+    so 'ORDER BY dt DESC' places NULLs LAST.
+    """
+    with db_session(temp_db) as conn:
+        conn.execute("CREATE TABLE test_dates (id INT, dt TEXT);")
+        conn.execute("INSERT INTO test_dates VALUES (1, '2024-01-01'), (2, NULL), (3, '2025-06-01');")
+
+        # Standard DESC query
+        rows = conn.execute("SELECT id, dt FROM test_dates ORDER BY dt DESC;").fetchall()
+
+        # In SQLite: '2025-06-01' > '2024-01-01' > NULL
+        assert rows[0]["id"] == 3       # '2025-06-01' (newest)
+        assert rows[1]["id"] == 1       # '2024-01-01' (older)
+        assert rows[2]["id"] == 2       # NULL (sorted last)
+        assert rows[2]["dt"] is None

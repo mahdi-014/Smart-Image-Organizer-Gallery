@@ -6,7 +6,7 @@ Concepts Explained for Beginners:
    - Walks through a folder and all of its subfolders (no matter how deeply nested).
 2. Pure Read-Only Guarantee:
    - Opens files exclusively with 'rb' (read binary) mode.
-   - Never calls remove, move, or rename.
+   - Never calls remove, move, or rename on source files.
 3. Path Normalization:
    - Resolves relative paths into absolute canonical Windows paths so the database
      always holds unambiguous references.
@@ -20,10 +20,17 @@ Concepts Explained for Beginners:
 6. Traversal Error Handling:
    - Uses os.walk(onerror=...) to capture filesystem errors (such as PermissionError
      or inaccessible directories) so they are reported rather than silently skipped.
+7. Incremental Scanning:
+   - Skips expensive SHA-256 hashing and EXIF extraction if a file's path, size,
+     and modification timestamp (mtime) match an existing catalog record.
+8. Transaction Batching:
+   - Commits records in batches of 200 to keep memory low, avoid long database write locks,
+     and guarantee progress preservation if a scan is interrupted.
 """
 
 import os
 from pathlib import Path
+from datetime import datetime
 from typing import Optional, Callable, Dict, Any, List, Set
 from pydantic import BaseModel
 
@@ -40,6 +47,8 @@ class ScanProgress(BaseModel):
     processed_count: int = 0
     skipped_count: int = 0
     error_count: int = 0
+    missing_count: int = 0
+    missing_files: List[str] = []
     current_file: str = ""
     is_complete: bool = False
     errors: List[str] = []
@@ -57,11 +66,13 @@ def scan_directory(
     directory_path: str,
     progress_callback: Optional[Callable[[ScanProgress], None]] = None,
     db_path: Optional[Path] = None,
-    extensions: Set[str] = SUPPORTED_EXTENSIONS
+    extensions: Set[str] = SUPPORTED_EXTENSIONS,
+    batch_size: int = 200
 ) -> ScanProgress:
     """
     Recursively scans an image folder, extracts metadata, generates thumbnails,
-    and inserts records into the SQLite catalog.
+    and inserts records into the SQLite catalog using incremental caching
+    and transaction batching.
     """
     root_path = Path(directory_path).resolve()
     progress = ScanProgress()
@@ -96,19 +107,59 @@ def scan_directory(
     if progress_callback:
         progress_callback(progress)
 
-    # 2. Second pass: Process each image safely into SQLite
+    # 2. Second pass: Process each image into SQLite with incremental check and transaction batching
+    candidate_paths_set: Set[str] = {str(p.resolve()) for p in candidates}
+
     with db_session(db_path) as conn:
+        # Check for missing / moved files previously indexed under this directory
+        existing_paths = repository.get_image_paths_under_directory(conn, str(root_path))
+        for p_str in existing_paths:
+            if p_str not in candidate_paths_set or not Path(p_str).exists():
+                progress.missing_count += 1
+                progress.missing_files.append(p_str)
+                repository.update_image_status(conn, p_str, "needs_review")
+
+        if progress.missing_count > 0:
+            conn.commit()
+
+        uncommitted_count = 0
+
         for file_path in candidates:
+            canonical_path = str(file_path.resolve())
             progress.current_file = file_path.name
+
             try:
-                # Cryptographic byte hash (SHA-256)
+                # Fast stat check for incremental skip
+                stat = file_path.stat()
+                current_size = stat.st_size
+                current_mtime = datetime.fromtimestamp(stat.st_mtime).isoformat()
+
+                existing = repository.get_image_by_path(conn, canonical_path)
+                if (
+                    existing is not None
+                    and existing.get("file_size") == current_size
+                    and existing.get("date_modified") == current_mtime
+                    and existing.get("file_hash_sha256")
+                    and existing.get("thumbnail_path")
+                ):
+                    # Verify thumbnail exists on disk
+                    thumb_candidate = Path(existing["thumbnail_path"])
+                    thumb_full = (
+                        thumb_candidate
+                        if thumb_candidate.is_absolute()
+                        else (settings.project_root / thumb_candidate)
+                    )
+                    if thumb_full.exists():
+                        progress.skipped_count += 1
+                        if progress_callback:
+                            progress_callback(progress)
+                        continue
+
+                # File is new or modified: compute hash, extract metadata, generate thumbnail
                 sha256 = compute_sha256(file_path)
-                # Perceptual hash deferred to Milestone 5
                 phash = None
-                # Metadata (dimensions, format, dates) - raises if corrupt or unreadable
                 meta = extract_metadata(file_path)
 
-                # WebP thumbnail - must succeed before inserting catalog record
                 thumb_path = generate_thumbnail(file_path, sha256)
                 if not thumb_path:
                     raise RuntimeError(f"Failed to generate thumbnail for {file_path.name}")
@@ -125,12 +176,18 @@ def scan_directory(
                     "date_taken": meta["date_taken"],
                     "date_modified": meta["date_modified"],
                     "thumbnail_path": thumb_path,
-                    "status": "scanned",
-                    "primary_category_id": None
+                    "status": existing["status"] if existing and existing.get("status") else "scanned",
+                    "primary_category_id": existing["primary_category_id"] if existing else None
                 }
 
                 repository.upsert_image(conn, record)
                 progress.processed_count += 1
+                uncommitted_count += 1
+
+                # Transaction batching checkpoint
+                if uncommitted_count >= batch_size:
+                    conn.commit()
+                    uncommitted_count = 0
 
             except Exception as e:
                 progress.error_count += 1
@@ -139,10 +196,14 @@ def scan_directory(
             if progress_callback:
                 progress_callback(progress)
 
+        # Commit any remaining records
+        if uncommitted_count > 0:
+            conn.commit()
+            uncommitted_count = 0
+
     progress.is_complete = True
     progress.current_file = ""
     if progress_callback:
         progress_callback(progress)
 
     return progress
-

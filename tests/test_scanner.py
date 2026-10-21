@@ -295,3 +295,169 @@ def test_scan_thumbnail_failure_rejects_catalog_record(tmp_path: Path, temp_db: 
 
 
 
+
+
+def test_scan_transaction_batching_crash_resilience(tmp_path: Path, temp_db: Path, monkeypatch):
+    """
+    Verifies that:
+    1. The scanner commits every 200 images (or batch_size images).
+    2. A fatal error/crash mid-scan preserves previously committed batches in the database.
+    """
+    import pytest
+    from PIL import Image
+    import backend.core.scanner as scanner_module
+
+    # Create 220 lightweight test images
+    img_dir = tmp_path / "batch_images"
+    img_dir.mkdir()
+    for i in range(1, 221):
+        Image.new("RGB", (10, 10), "blue").save(img_dir / f"img_{i:04d}.jpg")
+
+    # Simulate a crash/fatal unhandled exception at image 210
+    original_upsert = scanner_module.repository.upsert_image
+    call_count = [0]
+
+    def crash_upsert(conn, record):
+        call_count[0] += 1
+        if call_count[0] == 210:
+            raise KeyboardInterrupt("Simulated sudden crash / power outage mid-scan")
+        return original_upsert(conn, record)
+
+    monkeypatch.setattr(scanner_module.repository, "upsert_image", crash_upsert)
+
+    with pytest.raises(KeyboardInterrupt):
+        scan_directory(str(img_dir), db_path=temp_db, batch_size=200)
+
+    # Images 1-200 were committed in batch 1 and MUST persist on disk!
+    with db_session(temp_db) as conn:
+        committed_count = repository.count_images(conn)
+        assert committed_count == 200
+
+
+def test_incremental_scan_skips_unchanged_images(tmp_path: Path, temp_db: Path, monkeypatch):
+    """
+    Verifies that:
+    1. Initial scan catalogs all images.
+    2. Re-scanning an unchanged directory skips hashing and metadata extraction.
+    3. Zero new rows are created in the database.
+    4. progress.skipped_count equals total images.
+    """
+    from PIL import Image
+    import backend.core.scanner as scanner_module
+
+    img_dir = tmp_path / "photos"
+    img_dir.mkdir()
+    for i in range(1, 6):
+        Image.new("RGB", (50, 50), "green").save(img_dir / f"pic_{i}.jpg")
+
+    # Pass 1: Initial scan
+    p1 = scan_directory(str(img_dir), db_path=temp_db)
+    assert p1.processed_count == 5
+    assert p1.skipped_count == 0
+
+    with db_session(temp_db) as conn:
+        assert repository.count_images(conn) == 5
+
+    # Monkeypatch compute_sha256 and extract_metadata so that if they are called, test fails!
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("Expensive hashing / extraction was called on an unchanged file!")
+
+    monkeypatch.setattr(scanner_module, "compute_sha256", fail_if_called)
+    monkeypatch.setattr(scanner_module, "extract_metadata", fail_if_called)
+
+    # Pass 2: Re-scan unchanged directory
+    p2 = scan_directory(str(img_dir), db_path=temp_db)
+    assert p2.is_complete is True
+    assert p2.total_found == 5
+    assert p2.skipped_count == 5
+    assert p2.processed_count == 0
+    assert p2.error_count == 0
+
+    # Ensure zero new rows created
+    with db_session(temp_db) as conn:
+        assert repository.count_images(conn) == 5
+
+
+def test_incremental_scan_detects_mtime_or_size_change(tmp_path: Path, temp_db: Path):
+    """
+    Verifies that if an image's content or mtime changes on disk,
+    it is NOT skipped: it is re-hashed, re-extracted, and updated.
+    """
+    import time
+    from PIL import Image
+
+    img_dir = tmp_path / "photos"
+    img_dir.mkdir()
+    file_a = img_dir / "photo_a.jpg"
+    file_b = img_dir / "photo_b.jpg"
+
+    Image.new("RGB", (50, 50), "red").save(file_a)
+    Image.new("RGB", (50, 50), "blue").save(file_b)
+
+    # Pass 1: Initial scan
+    p1 = scan_directory(str(img_dir), db_path=temp_db)
+    assert p1.processed_count == 2
+    assert p1.skipped_count == 0
+
+    with db_session(temp_db) as conn:
+        rec_a1 = repository.get_image_by_path(conn, str(file_a.resolve()))
+        hash_a1 = rec_a1["file_hash_sha256"]
+
+    # Modify file_a (change pixels so size/mtime/hash changes)
+    time.sleep(0.05)  # Ensure mtime timestamp difference
+    Image.new("RGB", (100, 100), "yellow").save(file_a)
+
+    # Pass 2: Re-scan
+    p2 = scan_directory(str(img_dir), db_path=temp_db)
+    assert p2.total_found == 2
+    assert p2.skipped_count == 1   # file_b was unchanged and skipped
+    assert p2.processed_count == 1 # file_a was modified and re-processed
+    assert p2.error_count == 0
+
+    with db_session(temp_db) as conn:
+        assert repository.count_images(conn) == 2  # Still 2 images, zero duplicate rows
+        rec_a2 = repository.get_image_by_path(conn, str(file_a.resolve()))
+        assert rec_a2["file_hash_sha256"] != hash_a1
+        assert rec_a2["width"] == 100
+
+
+def test_scan_detects_and_reports_deleted_or_moved_files(tmp_path: Path, temp_db: Path):
+    """
+    Verifies that files deleted or moved since the last scan are detected,
+    reported in progress.missing_files, marked in DB, and no source files are touched.
+    """
+    from PIL import Image
+
+    img_dir = tmp_path / "photos"
+    img_dir.mkdir()
+    f1 = img_dir / "keep.jpg"
+    f2 = img_dir / "will_delete.jpg"
+
+    Image.new("RGB", (50, 50), "cyan").save(f1)
+    Image.new("RGB", (50, 50), "magenta").save(f2)
+
+    # Pass 1: Initial scan
+    p1 = scan_directory(str(img_dir), db_path=temp_db)
+    assert p1.processed_count == 2
+
+    with db_session(temp_db) as conn:
+        assert repository.count_images(conn) == 2
+
+    # Delete f2 from disk
+    f2.unlink()
+    assert not f2.exists()
+
+    # Pass 2: Re-scan
+    p2 = scan_directory(str(img_dir), db_path=temp_db)
+    assert p2.total_found == 1
+    assert p2.skipped_count == 1 # f1 was skipped
+    assert hasattr(p2, "missing_files")
+    assert len(p2.missing_files) == 1
+    assert "will_delete.jpg" in p2.missing_files[0]
+    assert p2.missing_count == 1
+
+    # In DB, verify f2 status was marked 'needs_review'
+    with db_session(temp_db) as conn:
+        rec_f2 = repository.get_image_by_path(conn, str(f2.resolve()))
+        assert rec_f2 is not None
+        assert rec_f2["status"] == "needs_review"

@@ -225,3 +225,25 @@ def log_operation(
     """, (batch_id, operation_type, image_id, source_path, proposed_path, destination_path, status, error_message))
     return cursor.lastrowid or 0
 
+
+
+def get_image_paths_under_directory(conn: sqlite3.Connection, directory_path: str) -> List[str]:
+    """Returns all cataloged file_path values that reside within directory_path."""
+    norm_dir_fwd = directory_path.rstrip("/\\") + "/"
+    norm_dir_back = directory_path.rstrip("/\\") + "\\"
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT file_path FROM images
+        WHERE file_path LIKE ? OR file_path LIKE ? OR file_path = ?
+    """, (f"{norm_dir_fwd}%", f"{norm_dir_back}%", directory_path))
+    return [row["file_path"] for row in cursor.fetchall()]
+
+
+def update_image_status(conn: sqlite3.Connection, file_path: str, status: str) -> bool:
+    """Updates the status of an image identified by its unique file_path."""
+    cursor = conn.cursor()
+    cursor.execute("""
+        UPDATE images SET status = ?, updated_at = DATETIME('now')
+        WHERE file_path = ?
+    """, (status, file_path))
+    return cursor.rowcount > 0
