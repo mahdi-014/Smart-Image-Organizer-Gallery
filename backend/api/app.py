@@ -5,18 +5,20 @@ FastAPI application definition and core route registration.
 from contextlib import asynccontextmanager
 import sqlite3
 from enum import Enum
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 from fastapi import FastAPI, Depends, Query, Path as FastPath, HTTPException, status
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from config.settings import settings
 from backend.api.deps import get_read_only_db, validate_thumbnail_path
 from backend.api.schemas import (
+    CategoryResponse,
     HealthResponse,
     ImageItemResponse,
     ImageListResponse,
 )
-from backend.db.repository import list_images, count_images, get_image_by_id
+from backend.db.repository import list_images, count_images, get_image_by_id, get_categories
 
 
 # Supported image processing status values — must match schema definition exactly.
@@ -158,3 +160,19 @@ def get_image_thumbnail(
         content_disposition_type="inline",
         headers={"Cache-Control": "public, max-age=31536000, immutable"},
     )
+
+@app.get("/api/categories", response_model=List[CategoryResponse])
+def get_active_categories(
+    db: sqlite3.Connection = Depends(get_read_only_db),
+) -> List[CategoryResponse]:
+    """
+    Return all active categories for UI filter dropdowns and taxonomy display.
+    """
+    categories = get_categories(db)
+    return [CategoryResponse.model_validate(cat) for cat in categories]
+
+
+# Static files mount for Web Gallery frontend
+FRONTEND_DIR = settings.project_root / "frontend"
+FRONTEND_DIR.mkdir(parents=True, exist_ok=True)
+app.mount("/", StaticFiles(directory=str(FRONTEND_DIR), html=True), name="frontend")

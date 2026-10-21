@@ -2,7 +2,7 @@
 
 A local-first, privacy-respecting Windows desktop application designed to organize 1,000–10,000 mixed images using Hybrid AI (Local CPU vision + optional Gemini API), deduplicate via cryptographic hashing, and safely copy approved files into categorized folders.
 
-## Current Status: Milestone 1 & M1.5 Hardening Complete (M2 Web Gallery in Progress)
+## Current Status: Milestone 1, M1.5 Hardening, & M2 Web Gallery Complete
 
 ### Verified Features:
 - **Recursive Read-Only Scanner:** Scans folders and nested subfolders while strictly guaranteeing original source files are never altered, moved, or deleted. Supports JPG, JPEG, PNG, WEBP, BMP, GIF, TIF, and TIFF formats (case-insensitive) with top-down traversal that prunes ignored directories (`.git`, `venv`, `node_modules`, `__pycache__`), captures filesystem traversal errors, and rejects corrupt or unreadable files without halting accessible processing.

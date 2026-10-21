@@ -14,6 +14,18 @@ class HealthResponse(BaseModel):
     service: str
 
 
+class CategoryResponse(BaseModel):
+    """
+    Active category representation for UI taxonomy and filtering.
+    """
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    code_name: str
+    display_name: str
+    description: Optional[str] = None
+
+
 class ImageItemResponse(BaseModel):
     """
     Public metadata representation of a single cataloged image.

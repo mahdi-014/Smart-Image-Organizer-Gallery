@@ -85,7 +85,7 @@ tests/
 |---|-----------|--------|
 | M1 | Scanner, hasher, metadata/EXIF, thumbnails, SQLite catalog, exact duplicates, tests | **Done** |
 | M1.5 | **Hardening from the audit (Batches 1–5)** | **Done** |
-| M2 | Web gallery UI (`/api/images`, thumbnails, responsive browser viewer) | **In progress** |
+| M2 | Web gallery UI (`/api/images`, thumbnails, responsive browser viewer) | **Done** |
 | M3 | Local AI classification (zero-shot, text-vs-image matching) | Planned |
 | M4 | Optional Gemini fallback (thumbnails only, consent required) | Planned |
 | M5 | Near-duplicate detection (pHash/dHash) + "best photo in group" suggestion | Planned |
