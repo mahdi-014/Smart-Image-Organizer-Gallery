@@ -214,4 +214,86 @@ def test_generate_thumbnail_opaque_palette_uses_rgb(tmp_path: Path):
         assert thumb.mode == "RGB"
 
 
+def make_minimal_bmp_header(path: Path, width: int, height: int) -> Path:
+    """Creates a memory-safe 54-byte BMP header asserting large dimensions without pixel allocation."""
+    header = bytearray(54)
+    header[0:2] = b"BM"
+    header[2:6] = (54).to_bytes(4, "little")
+    header[10:14] = (54).to_bytes(4, "little")
+    header[14:18] = (40).to_bytes(4, "little")
+    header[18:22] = (width).to_bytes(4, "little", signed=True)
+    header[22:26] = (height).to_bytes(4, "little", signed=True)
+    header[26:28] = (1).to_bytes(2, "little")
+    header[28:30] = (24).to_bytes(2, "little")
+    path.write_bytes(header)
+    return path
 
+
+def test_extract_metadata_exceeding_pixel_ceiling_raises_value_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """
+    Verifies that extract_metadata explicitly rejects an image whose dimensions
+    exceed settings.max_image_pixels before reading pixels, raising a clear ValueError.
+    """
+    from config.settings import settings
+    import pytest
+
+    # 100x100 = 10,000 pixels
+    fpath = tmp_path / "oversized.png"
+    Image.new("RGB", (100, 100), "red").save(fpath)
+
+    # Set ceiling to 5,000 pixels (below the 10,000 pixel image)
+    monkeypatch.setattr(settings, "max_image_pixels", 5000, raising=False)
+
+    with pytest.raises(ValueError, match=r"exceeds? safety ceiling"):
+        extract_metadata(fpath)
+
+
+def test_generate_thumbnail_exceeding_pixel_ceiling_returns_none(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """
+    Verifies that generate_thumbnail refuses to decode or process an image exceeding
+    the configured pixel ceiling, returning None without creating a thumbnail file.
+    """
+    from config.settings import settings
+
+    fpath = tmp_path / "oversized_for_thumb.png"
+    Image.new("RGB", (100, 100), "blue").save(fpath)
+
+    monkeypatch.setattr(settings, "max_image_pixels", 5000, raising=False)
+
+    result = generate_thumbnail(fpath, "hash_oversized", output_dir=tmp_path)
+    assert result is None
+    assert not (tmp_path / "hash_oversized.webp").exists()
+
+
+def test_extract_metadata_pillow_decompression_bomb_error_handled(tmp_path: Path):
+    """
+    Verifies that an image triggering Pillow's native DecompressionBombError
+    (e.g. >178.96M pixels) is caught and reported with a clean, clear ValueError.
+    Uses a 54-byte BMP header to avoid allocating memory.
+    """
+    import pytest
+
+    # 15,000 x 15,000 = 225,000,000 pixels (>178.96M Pillow limit)
+    bomb_path = make_minimal_bmp_header(tmp_path / "giant_bomb.bmp", 15000, 15000)
+
+    with pytest.raises(ValueError, match=r"exceeds? safety ceiling"):
+        extract_metadata(bomb_path)
+
+
+def test_extract_metadata_at_or_below_ceiling_succeeds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """
+    Verifies that legitimate images at or below the configured pixel ceiling
+    continue to extract metadata successfully without false rejections.
+    """
+    from config.settings import settings
+
+    fpath = tmp_path / "normal_sized.png"
+    Image.new("RGB", (50, 50), "green").save(fpath)
+
+    # Ceiling exactly at 2,500 pixels (matches 50x50)
+    monkeypatch.setattr(settings, "max_image_pixels", 2500, raising=False)
+
+    meta = extract_metadata(fpath)
+    assert meta["width"] == 50
+    assert meta["height"] == 50
+    assert meta["file_name"] == "normal_sized.png"

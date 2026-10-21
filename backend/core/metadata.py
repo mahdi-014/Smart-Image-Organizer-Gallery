@@ -20,6 +20,7 @@ Concepts Explained for Beginners:
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, Any, Optional, Tuple, Union
+import warnings
 from PIL import Image, ImageOps, ExifTags
 
 from config.settings import (
@@ -57,6 +58,27 @@ def parse_exif_date(date_str: Optional[str]) -> Optional[str]:
     return None
 
 
+def validate_image_dimensions(width: int, height: int, max_pixels: Optional[int] = None) -> int:
+    """
+    Validates that image dimensions are positive and within the safety ceiling.
+    Returns total pixel count.
+
+    Raises:
+        ValueError: If dimensions are non-positive or exceed max_pixels.
+    """
+    if width <= 0 or height <= 0:
+        raise ValueError(f"Invalid image dimensions ({width}x{height})")
+
+    pixels = width * height
+    ceiling = max_pixels if max_pixels is not None else settings.max_image_pixels
+    if ceiling and pixels > ceiling:
+        raise ValueError(
+            f"Image dimensions ({width}x{height} = {pixels:,} pixels) exceed "
+            f"safety ceiling of {ceiling:,} pixels."
+        )
+    return pixels
+
+
 def extract_metadata(file_path: Union[str, Path]) -> Dict[str, Any]:
     """
     Reads image dimensions, format, file stats, and EXIF tags.
@@ -76,37 +98,43 @@ def extract_metadata(file_path: Union[str, Path]) -> Dict[str, Any]:
 
     # Open the image to read headers and basic dimensions.
     # Note: Image.open() is lazy and does not decode full pixel data into memory.
-    with Image.open(path) as img:
-        width, height = img.size
-        if width <= 0 or height <= 0:
-            raise ValueError(f"Invalid image dimensions ({width}x{height}) in {path.name}")
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", Image.DecompressionBombWarning)
+            with Image.open(path) as img:
+                width, height = img.size
+                validate_image_dimensions(width, height)
 
-        file_format = img.format.upper() if img.format else path.suffix.lstrip(".").upper()
+                file_format = img.format.upper() if img.format else path.suffix.lstrip(".").upper()
 
-        # Defensively extract EXIF tags (optional metadata).
-        # Missing, empty, or unparseable EXIF must not cause an otherwise valid image to fail.
-        try:
-            raw_exif = img.getexif()
-            if raw_exif:
-                for tag_id, value in raw_exif.items():
-                    tag_name = ExifTags.TAGS.get(tag_id, str(tag_id))
-                    # Avoid serializing massive binary tags
-                    if isinstance(value, (str, int, float)):
-                        exif_tags[tag_name] = value
+                # Defensively extract EXIF tags (optional metadata).
+                # Missing, empty, or unparseable EXIF must not cause an otherwise valid image to fail.
+                try:
+                    raw_exif = img.getexif()
+                    if raw_exif:
+                        for tag_id, value in raw_exif.items():
+                            tag_name = ExifTags.TAGS.get(tag_id, str(tag_id))
+                            # Avoid serializing massive binary tags
+                            if isinstance(value, (str, int, float)):
+                                exif_tags[tag_name] = value
 
-                # Check for DateTimeOriginal in standard EXIF or Exif sub-IFD
-                dt_raw = exif_tags.get("DateTimeOriginal") or exif_tags.get("DateTime")
-                if not dt_raw:
-                    try:
-                        exif_ifd = raw_exif.get_ifd(ExifTags.IFD.Exif)
-                        dt_raw = exif_ifd.get(ExifTags.Base.DateTimeOriginal) or exif_ifd.get(ExifTags.Base.DateTimeDigitized)
-                    except Exception:
-                        pass
+                        # Check for DateTimeOriginal in standard EXIF or Exif sub-IFD
+                        dt_raw = exif_tags.get("DateTimeOriginal") or exif_tags.get("DateTime")
+                        if not dt_raw:
+                            try:
+                                exif_ifd = raw_exif.get_ifd(ExifTags.IFD.Exif)
+                                dt_raw = exif_ifd.get(ExifTags.Base.DateTimeOriginal) or exif_ifd.get(ExifTags.Base.DateTimeDigitized)
+                            except Exception:
+                                pass
 
-                date_taken = parse_exif_date(str(dt_raw)) if dt_raw else None
-        except Exception:
-            # Corrupted EXIF data does not invalidate a decodable image
-            pass
+                        date_taken = parse_exif_date(str(dt_raw)) if dt_raw else None
+                except Exception:
+                    # Corrupted EXIF data does not invalidate a decodable image
+                    pass
+    except (Image.DecompressionBombError, Image.DecompressionBombWarning) as bomb_err:
+        raise ValueError(
+            f"Image dimensions exceed safety ceiling: {bomb_err}"
+        ) from bomb_err
 
     # If no EXIF date taken exists, fallback to file modification timestamp
     if not date_taken:
@@ -157,27 +185,31 @@ def generate_thumbnail(
         return _format_path(dest_file)
 
     try:
-        with Image.open(file_path) as img:
-            # Auto-rotate based on EXIF orientation tag
-            transposed = ImageOps.exif_transpose(img)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", Image.DecompressionBombWarning)
+            with Image.open(file_path) as img:
+                validate_image_dimensions(img.size[0], img.size[1])
 
-            # Convert color mode for WebP compatibility
-            if transposed.mode == "RGBA":
-                thumb_img = transposed.copy()
-            elif transposed.mode in ("LA", "PA") or "transparency" in transposed.info:
-                thumb_img = transposed.convert("RGBA")
-            elif transposed.mode != "RGB":
-                thumb_img = transposed.convert("RGB")
-            else:
-                thumb_img = transposed.copy()
+                # Auto-rotate based on EXIF orientation tag
+                transposed = ImageOps.exif_transpose(img)
 
-            thumb_img.thumbnail(max_size, Image.Resampling.LANCZOS)
-            thumb_img.save(
-                dest_file,
-                format=THUMBNAIL_FORMAT,
-                quality=THUMBNAIL_QUALITY,
-                method=6  # Highest compression efficiency
-            )
+                # Convert color mode for WebP compatibility
+                if transposed.mode == "RGBA":
+                    thumb_img = transposed.copy()
+                elif transposed.mode in ("LA", "PA") or "transparency" in transposed.info:
+                    thumb_img = transposed.convert("RGBA")
+                elif transposed.mode != "RGB":
+                    thumb_img = transposed.convert("RGB")
+                else:
+                    thumb_img = transposed.copy()
+
+                thumb_img.thumbnail(max_size, Image.Resampling.LANCZOS)
+                thumb_img.save(
+                    dest_file,
+                    format=THUMBNAIL_FORMAT,
+                    quality=THUMBNAIL_QUALITY,
+                    method=6  # Highest compression efficiency
+                )
 
         return _format_path(dest_file)
 

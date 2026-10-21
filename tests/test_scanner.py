@@ -581,3 +581,48 @@ def test_scan_filenotfound_when_source_image_exists_treated_as_error(tmp_path: P
     assert p.missing_count == 0
     assert p.error_count == 1
     assert any("valid_image.jpg" in err for err in p.errors)
+
+
+def test_scan_directory_rejects_decompression_bomb_with_clear_error(tmp_path: Path, temp_db: Path, monkeypatch):
+    """
+    Verifies that when an oversized image exceeding settings.max_image_pixels is scanned:
+    1. It is rejected and not inserted into the database catalog.
+    2. progress.error_count is incremented by 1.
+    3. progress.errors records a clear, descriptive message citing the safety ceiling.
+    4. Normal accessible images in the same folder are cataloged successfully.
+    """
+    from PIL import Image
+    from config.settings import settings
+
+    img_dir = tmp_path / "photos"
+    img_dir.mkdir()
+
+    # Normal image: 50x50 = 2,500 pixels
+    normal_img = img_dir / "good_photo.jpg"
+    Image.new("RGB", (50, 50), "green").save(normal_img)
+
+    # Oversized image: 100x100 = 10,000 pixels
+    oversized_img = img_dir / "huge_bomb.jpg"
+    Image.new("RGB", (100, 100), "red").save(oversized_img)
+
+    # Set application ceiling to 5,000 pixels
+    monkeypatch.setattr(settings, "max_image_pixels", 5000, raising=False)
+
+    progress = scan_directory(str(img_dir), db_path=temp_db)
+
+    assert progress.is_complete is True
+    assert progress.total_found == 2
+    assert progress.processed_count == 1
+    assert progress.error_count == 1
+
+    # Check clear error message
+    assert len(progress.errors) == 1
+    err_msg = progress.errors[0]
+    assert "huge_bomb.jpg" in err_msg
+    assert "safety ceiling" in err_msg.lower() or "exceeds" in err_msg.lower()
+
+    # Verify only the valid image exists in database
+    with db_session(temp_db) as conn:
+        assert repository.count_images(conn) == 1
+        images = repository.list_images(conn)
+        assert images[0]["file_name"] == "good_photo.jpg"

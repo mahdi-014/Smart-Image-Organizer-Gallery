@@ -39,6 +39,10 @@ THUMBNAIL_QUALITY = 85
 # Reads files incrementally to avoid consuming large amounts of RAM.
 HASH_CHUNK_SIZE = 65536
 
+# Maximum allowed image pixels (~89.48 Megapixels).
+# Explicit application safety ceiling protecting against decompression bomb attacks.
+DEFAULT_MAX_IMAGE_PIXELS = 89_478_485
+
 
 class CategoryDefinition(BaseModel):
     """Schema for a single category defined in categories.yaml."""
@@ -55,6 +59,7 @@ class Settings(BaseModel):
     host: str = "127.0.0.1"
     port: int = 8000
     debug: bool = True
+    max_image_pixels: int = DEFAULT_MAX_IMAGE_PIXELS
 
     # Storage Paths
     project_root: Path = PROJECT_ROOT
@@ -99,4 +104,3 @@ class Settings(BaseModel):
 
 # Singleton instance for easy import across modules
 settings = Settings.load()
-
