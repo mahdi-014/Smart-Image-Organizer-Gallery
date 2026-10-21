@@ -919,3 +919,10 @@ body {
   white-space: nowrap;
   margin-top: -0.2rem;
 }
+
+
+.btn-sm {
+  padding: 0.35rem 0.65rem;
+  font-size: 0.78rem;
+  border-radius: var(--radius-sm);
+}

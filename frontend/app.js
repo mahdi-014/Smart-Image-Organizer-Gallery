@@ -33,6 +33,8 @@
     connectionStatus: document.getElementById('connectionStatus'),
     connectionText: document.getElementById('connectionText'),
     totalImagesCount: document.getElementById('totalImagesCount'),
+    clearCatalogBtn: document.getElementById('clearCatalogBtn'),
+    clearBeforeScanCheck: document.getElementById('clearBeforeScanCheck'),
 
     // Workflow Elements
     sourceFolderInput: document.getElementById('sourceFolderInput'),
@@ -264,12 +266,40 @@
     }
   }
 
+  async function clearCatalog() {
+    if (!confirm('Are you sure you want to clear the catalog? This will remove all scanned staging records so you can start clean. (Your original files on disk will NOT be touched).')) {
+      return;
+    }
+    try {
+      const res = await fetch('/api/catalog/clear', { method: 'POST' });
+      if (!res.ok) throw new Error('Failed to clear catalog');
+      const data = await res.json();
+      await loadImages();
+      elements.workflowProgressCard.style.display = 'flex';
+      elements.progressTitle.textContent = 'Catalog Cleared';
+      elements.progressBarFill.style.width = '100%';
+      elements.progressPercentage.textContent = '100%';
+      elements.progressDetail.textContent = data.message || 'Catalog cleared successfully.';
+    } catch (err) {
+      alert(`Error clearing catalog: ${err.message}`);
+    }
+  }
+
   // Scanning Pipeline
   async function startScan() {
     const src = elements.sourceFolderInput.value.trim();
     if (!src) {
       alert('Please select a valid Source Folder first.');
       return;
+    }
+
+    if (elements.clearBeforeScanCheck && elements.clearBeforeScanCheck.checked) {
+      try {
+        await fetch('/api/catalog/clear', { method: 'POST' });
+        await loadImages();
+      } catch (e) {
+        console.warn('Auto-clearing catalog before scan failed:', e);
+      }
     }
 
     state.isScanning = true;
@@ -338,8 +368,18 @@
 
     try {
       const res = await fetch('/api/classify/start', { method: 'POST' });
-      if (!res.ok) throw new Error('Classification failed.');
       const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.detail || 'Classification failed.');
+      }
+
+      if (data.total_processed === 0) {
+        elements.progressBarFill.style.width = '100%';
+        elements.progressPercentage.textContent = '100%';
+        elements.progressTitle.textContent = 'Classification Check';
+        elements.progressDetail.textContent = 'No unclassified images found in catalog. All images are already classified or organized.';
+        return;
+      }
 
       elements.progressBarFill.style.width = '100%';
       elements.progressPercentage.textContent = '100%';
@@ -424,6 +464,7 @@
         body: JSON.stringify({
           destination_dir: state.currentPlan.destination_root,
           include_needs_review: true,
+          auto_remove_organized: true,
         }),
       });
       if (!res.ok) throw new Error('Execution failed.');
@@ -432,7 +473,7 @@
       elements.progressBarFill.style.width = '100%';
       elements.progressPercentage.textContent = '100%';
       elements.progressTitle.textContent = 'Organization Successfully Completed!';
-      elements.progressDetail.textContent = `✓ Copied: ${result.copied_count} files | Verified SHA-256: ${result.verified_count} | Failed: ${result.failed_count}`;
+      elements.progressDetail.textContent = `✓ Copied: ${result.copied_count} files | Verified SHA-256: ${result.verified_count} | Successfully organized copies delivered & removed from staging catalog.`;
 
       elements.openExplorerBtn.disabled = false;
       await loadImages();
@@ -725,6 +766,9 @@
     elements.destFolderInput.addEventListener('change', handleDestFolderChange);
     elements.browseSourceBtn.addEventListener('click', () => browseFolder(true));
     elements.browseDestBtn.addEventListener('click', () => browseFolder(false));
+    if (elements.clearCatalogBtn) {
+      elements.clearCatalogBtn.addEventListener('click', clearCatalog);
+    }
 
     // Pipeline actions
     elements.startScanBtn.addEventListener('click', startScan);

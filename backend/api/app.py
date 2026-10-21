@@ -32,7 +32,9 @@ from backend.api.schemas import (
     OrganizeExecuteRequest,
     ImageRenameRequest,
     ImageRenameResponse,
+    CatalogClearResponse,
 )
+from backend.db.session import init_db
 from backend.db.repository import (
     list_images,
     count_images,
@@ -47,6 +49,7 @@ from backend.core.folder_service import (
     browse_local_folder,
     open_in_file_explorer,
     check_folder_overlap,
+    clear_staging_catalog,
 )
 from backend.core.renamer import sanitize_proposed_filename
 from backend.core.scan_manager import coordinator
@@ -73,9 +76,10 @@ class ImageStatus(str, Enum):
 async def lifespan(app: FastAPI):
     """
     Explicit application lifecycle management.
-    Ensures runtime storage directories exist when the server starts.
+    Ensures runtime storage directories exist and migrations are applied on startup.
     """
     settings.ensure_directories()
+    init_db()
     yield
 
 
@@ -279,15 +283,17 @@ def get_scan_status_route() -> ScanStatusResponse:
 @app.post("/api/classify/start", response_model=ClassifyStartResponse)
 def start_classification_route(db: sqlite3.Connection = Depends(get_read_only_db)) -> ClassifyStartResponse:
     """Runs local AI classification across unclassified catalog images."""
-    classifier = LocalVisionClassifier()
-    # Note: Using active DB connection or path
-    summary = classifier.classify_catalog(db_path=get_db_path())
-    return ClassifyStartResponse(
-        status="completed",
-        total_processed=summary["total_processed"],
-        classified_count=summary["classified_count"],
-        needs_review_count=summary["needs_review_count"],
-    )
+    try:
+        classifier = LocalVisionClassifier()
+        summary = classifier.classify_catalog(db_path=get_db_path())
+        return ClassifyStartResponse(
+            status="completed",
+            total_processed=summary["total_processed"],
+            classified_count=summary["classified_count"],
+            needs_review_count=summary["needs_review_count"],
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/api/classify/status", response_model=ClassifyStatusResponse)
@@ -373,8 +379,23 @@ def organize_execute_route(
         image_ids=payload.image_ids,
         include_needs_review=payload.include_needs_review,
     )
-    result = execute_organization_plan(plan, db_path=get_db_path())
+    result = execute_organization_plan(
+        plan,
+        db_path=get_db_path(),
+        auto_remove_organized=payload.auto_remove_organized,
+    )
     return result
+
+
+@app.post("/api/catalog/clear", response_model=CatalogClearResponse)
+def clear_catalog_route() -> CatalogClearResponse:
+    """Clears all staged images from catalog and removes cached thumbnails."""
+    cleared = clear_staging_catalog(db_path=get_db_path(), clear_thumbnails=True)
+    return CatalogClearResponse(
+        success=True,
+        cleared_count=cleared,
+        message=f"Cleared {cleared} images from catalog.",
+    )
 
 
 # Static files mount for Web Gallery frontend

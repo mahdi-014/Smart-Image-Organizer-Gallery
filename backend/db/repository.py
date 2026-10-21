@@ -346,3 +346,27 @@ def get_needs_review_images(
         LIMIT ? OFFSET ?
     """, (limit, offset))
     return [dict(row) for row in cursor.fetchall()]
+
+
+def clear_catalog_images(conn: sqlite3.Connection, image_ids: Optional[List[int]] = None) -> int:
+    """
+    Removes staged image records and related classifications/queue entries.
+    If image_ids is provided, removes only specified images.
+    Preserves operation_logs and category taxonomy.
+    """
+    cursor = conn.cursor()
+    if image_ids:
+        placeholders = ",".join(["?"] * len(image_ids))
+        cursor.execute(f"DELETE FROM review_queue WHERE image_id IN ({placeholders})", image_ids)
+        cursor.execute(f"DELETE FROM image_classifications WHERE image_id IN ({placeholders})", image_ids)
+        cursor.execute(f"DELETE FROM image_tags WHERE image_id IN ({placeholders})", image_ids)
+        cursor.execute(f"DELETE FROM images WHERE id IN ({placeholders})", image_ids)
+        return cursor.rowcount
+    else:
+        cursor.execute("SELECT COUNT(*) FROM images")
+        count = cursor.fetchone()[0]
+        cursor.execute("DELETE FROM review_queue")
+        cursor.execute("DELETE FROM image_classifications")
+        cursor.execute("DELETE FROM image_tags")
+        cursor.execute("DELETE FROM images")
+        return count

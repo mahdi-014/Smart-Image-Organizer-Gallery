@@ -139,6 +139,7 @@ class OrganizeExecuteRequest(BaseModel):
     destination_dir: str
     image_ids: Optional[List[int]] = None
     include_needs_review: bool = False
+    auto_remove_organized: bool = True
 
 
 class ImageRenameRequest(BaseModel):
@@ -151,3 +152,10 @@ class ImageRenameResponse(BaseModel):
     success: bool
     image_id: int
     proposed_filename: str
+
+
+class CatalogClearResponse(BaseModel):
+    """Response payload confirming cleared staging catalog."""
+    success: bool
+    cleared_count: int
+    message: str

@@ -216,3 +216,35 @@ def test_image_rename_api(client: TestClient, temp_db: Path):
     # 3. Nonexistent image returns 404
     bad_res = client.patch("/api/images/999999/rename", json={"proposed_filename": "test.jpg"})
     assert bad_res.status_code == 404
+
+
+def test_clear_catalog_api(client: TestClient, temp_db: Path):
+    """Verifies POST /api/catalog/clear purges all staging catalog records."""
+    with db_session(temp_db) as conn:
+        repository.upsert_image(conn, {
+            "file_path": "C:/photos/to_clear.jpg",
+            "file_name": "to_clear.jpg",
+            "file_size": 1234,
+            "file_hash_sha256": "h_clear",
+            "phash": "dummy",
+            "width": 100,
+            "height": 100,
+            "file_format": "JPEG",
+            "date_taken": None,
+            "date_modified": "2024-01-01",
+            "thumbnail_path": None,
+            "status": "scanned",
+            "primary_category_id": None,
+        })
+        assert repository.count_images(conn) >= 1
+
+    res = client.post("/api/catalog/clear")
+    assert res.status_code == 200
+    data = res.json()
+    assert data["success"] is True
+    assert data["cleared_count"] >= 1
+
+    # Verify catalog is empty now
+    get_res = client.get("/api/images")
+    assert get_res.status_code == 200
+    assert get_res.json()["total"] == 0

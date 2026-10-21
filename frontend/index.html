@@ -27,6 +27,7 @@
           <span class="stat-label">Catalog</span>
           <span id="totalImagesCount" class="stat-value">0</span>
         </div>
+        <button id="clearCatalogBtn" class="btn btn-secondary btn-sm" title="Clear staging catalog to start clean">🗑️ Clear Catalog</button>
       </div>
     </header>
 
@@ -67,6 +68,14 @@
             </div>
             <div id="destValidationMsg" class="validation-msg"></div>
           </div>
+        </div>
+
+        <!-- Auto-clean option before scan -->
+        <div style="margin: 0.5rem 0 1rem 0; display: flex; align-items: center; gap: 0.5rem; font-size: 0.85rem; color: var(--text-muted);">
+          <label style="cursor: pointer; display: flex; align-items: center; gap: 0.4rem;">
+            <input type="checkbox" id="clearBeforeScanCheck" checked />
+            <span>Clear previous catalog before scanning new folder</span>
+          </label>
         </div>
 
         <!-- Workflow Action Pipeline -->

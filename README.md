@@ -100,13 +100,16 @@ Categorized Output Folders (Byte-for-Byte Copies of Originals)
 - **Content-Aware Visual Recognition & Semantic Renaming:** Decodes actual image pixels (color distributions, multi-zone spatial focus, edge frequencies, and texture complexity) to identify visual subjects, documents, UI screenshots, nature landscapes, animals, and food dishes. Synthesizes concise natural-language descriptions and generates clean, lowercase, hyphen-separated kebab-case filenames (e.g. `golden-retriever-running-on-grass.jpg`, `scanned-receipt-target-store.png`, `terminal-build-error-log.png`).
 - **Windows-Safe Filename Protection & Collision Resolution:** Guards against Windows device reserved names (`CON`, `PRN`, `AUX`, `NUL`, `COM1-9`, `LPT1-9`), strips unsafe filesystem punctuation, enforces 30–60 character bounds, preserves original file extensions, and resolves duplicate naming conflicts with `-2`, `-3` numeric suffixes without overwriting.
 - **Review & Manual Overrides:** Allows users to review AI-generated visual descriptions, customize or edit proposed filenames, and reassign categories before or after copying.
+- **Automatic Catalog Clean & Reset:** Staged image records and preview thumbnails are automatically removed from the active catalog once verified copies are delivered to destination folders. Users can also instantly clear previous staging items with a single click or automatically reset before scanning a new folder.
 - **Responsive Web Gallery UI:** Zero-dependency vanilla JavaScript frontend served directly at `/`, complete with debounced search, category/status filters, page size customization (12, 24, 48, 96), and keyboard-navigable image inspection modal.
 - **REST API Endpoints:**
   - `GET /api/health`: Health status and app metadata with typed Pydantic models.
   - `GET /api/categories`: Returns active taxonomies loaded from `categories.yaml`.
   - `GET /api/images`: Paginated catalog listing with search and filter parameters.
   - `GET /api/images/{image_id}/thumbnail`: Content-addressed thumbnail streaming with traversal protection.
-- **Automated Test Suite:** 137 passing pytest tests covering unit, edge-case, and end-to-end integration scenarios.
+  - `PATCH /api/images/{image_id}/rename`: Edits proposed semantic filename with Windows safety sanitization.
+  - `POST /api/catalog/clear`: Clears staging catalog records and cached thumbnails for clean-slate scanning.
+- **Automated Test Suite:** 140 passing pytest tests covering unit, edge-case, and end-to-end integration scenarios.
 
 ---
 
@@ -183,7 +186,7 @@ Open your browser to:
 ├── scripts/
 │   ├── generate_test_data.py  # Synthetic test image generator
 │   └── scan.py                # Command-line scanner runner
-├── tests/                     # Automated pytest test suite (137 tests)
+├── tests/                     # Automated pytest test suite (140 tests)
 ├── .env.example               # Environment variables template
 ├── requirements.txt           # Python package requirements
 └── README.md                  # Unified documentation and project roadmap

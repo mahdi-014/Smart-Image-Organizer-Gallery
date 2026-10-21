@@ -111,3 +111,26 @@ def open_in_file_explorer(folder_path: str) -> bool:
     except Exception as e:
         logger.error(f"Failed to open File Explorer for {folder_path}: {e}")
         return False
+
+
+def clear_staging_catalog(db_path: Optional[Path] = None, clear_thumbnails: bool = True) -> int:
+    """
+    Clears all staged images from SQLite catalog and deletes cached preview thumbnails.
+    """
+    from backend.db.session import db_session
+    from backend.db import repository
+    from config.settings import settings
+
+    with db_session(db_path) as conn:
+        cleared_count = repository.clear_catalog_images(conn)
+
+    if clear_thumbnails:
+        thumb_dir = settings.thumbnails_dir
+        if thumb_dir.exists():
+            for f in thumb_dir.glob("*.webp"):
+                try:
+                    f.unlink()
+                except Exception:
+                    pass
+
+    return cleared_count

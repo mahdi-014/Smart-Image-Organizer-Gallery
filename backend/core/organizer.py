@@ -204,6 +204,7 @@ def generate_organization_plan(
 def execute_organization_plan(
     plan: OrganizationPlan,
     db_path: Optional[Path] = None,
+    auto_remove_organized: bool = False,
 ) -> OrganizationResult:
     """
     Executes an approved organization plan:
@@ -297,8 +298,23 @@ def execute_organization_plan(
                     status="completed",
                 )
 
-                # Update database catalog image status
-                repository.update_image_status(conn, str(src_path), "organized")
+                if auto_remove_organized:
+                    # Clean up preview thumbnail
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT thumbnail_path FROM images WHERE file_path = ?", (str(src_path),))
+                    t_row = cursor.fetchone()
+                    if t_row and t_row["thumbnail_path"]:
+                        t_p = Path(t_row["thumbnail_path"])
+                        if t_p.exists():
+                            try:
+                                t_p.unlink()
+                            except Exception:
+                                pass
+                    # Automatically remove from staging catalog
+                    cursor.execute("DELETE FROM images WHERE file_path = ?", (str(src_path),))
+                else:
+                    # Update database catalog image status
+                    repository.update_image_status(conn, str(src_path), "organized")
 
             except Exception as e:
                 err = f"Failed copying {src_path} -> {dest_path}: {e}"
