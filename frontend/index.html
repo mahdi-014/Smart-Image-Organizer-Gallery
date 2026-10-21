@@ -1,184 +1,235 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Smart Image Organizer & Gallery</title>
-  <link rel="stylesheet" href="/style.css">
-</head>
-<body>
-  <!-- Application Header -->
-  <header class="app-header">
-    <div class="header-brand">
-      <div class="logo-icon">🖼️</div>
-      <div>
-        <h1 class="app-title">Smart Image Organizer & Gallery</h1>
-        <p class="app-subtitle">Local-First Privacy-Guaranteed Image Curation</p>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Smart Image Organizer & Gallery</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <!-- Application Header -->
+    <header class="app-header">
+      <div class="header-brand">
+        <div class="logo-icon">🖼️</div>
+        <div>
+          <h1 class="app-title">Smart Image Organizer & Gallery</h1>
+          <p class="app-subtitle">
+            Local-First Privacy-Guaranteed Image Curation
+          </p>
+        </div>
       </div>
-    </div>
-    <div class="header-status">
-      <div id="connectionStatus" class="status-pill status-checking">
-        <span class="status-dot"></span>
-        <span id="connectionText">Connecting...</span>
+      <div class="header-status">
+        <div id="connectionStatus" class="status-pill status-checking">
+          <span class="status-dot"></span>
+          <span id="connectionText">Connecting...</span>
+        </div>
+        <div class="stat-badge">
+          <span class="stat-label">Catalog</span>
+          <span id="totalImagesCount" class="stat-value">0</span>
+        </div>
       </div>
-      <div class="stat-badge">
-        <span class="stat-label">Catalog</span>
-        <span id="totalImagesCount" class="stat-value">0</span>
-      </div>
-    </div>
-  </header>
+    </header>
 
-  <!-- Control & Filter Toolbar -->
-  <section class="toolbar-section">
-    <div class="toolbar-controls">
-      <!-- Search Input -->
-      <div class="search-box">
-        <span class="search-icon">🔍</span>
-        <input 
-          type="text" 
-          id="searchInput" 
-          placeholder="Search by filename..." 
-          autocomplete="off"
+    <!-- Control & Filter Toolbar -->
+    <section class="toolbar-section">
+      <div class="toolbar-controls">
+        <!-- Search Input -->
+        <div class="search-box">
+          <span class="search-icon">🔍</span>
+          <input
+            type="text"
+            id="searchInput"
+            placeholder="Search by filename..."
+            autocomplete="off"
+          />
+          <button
+            id="clearSearchBtn"
+            class="clear-btn"
+            title="Clear search"
+            style="display: none"
+          >
+            ✕
+          </button>
+        </div>
+
+        <!-- Category Filter -->
+        <div class="select-group">
+          <label for="categoryFilter">Category:</label>
+          <select id="categoryFilter">
+            <option value="">All Categories</option>
+          </select>
+        </div>
+
+        <!-- Status Filter -->
+        <div class="select-group">
+          <label for="statusFilter">Status:</label>
+          <select id="statusFilter">
+            <option value="">All Statuses</option>
+            <option value="scanned">Scanned</option>
+            <option value="classified">Classified</option>
+            <option value="needs_review">Needs Review</option>
+            <option value="approved">Approved</option>
+            <option value="organized">Organized</option>
+          </select>
+        </div>
+
+        <!-- Page Size Selector -->
+        <div class="select-group">
+          <label for="pageSizeSelect">Show:</label>
+          <select id="pageSizeSelect">
+            <option value="12">12</option>
+            <option value="24" selected>24</option>
+            <option value="48">48</option>
+            <option value="96">96</option>
+          </select>
+        </div>
+
+        <!-- Refresh Button -->
+        <button
+          id="refreshBtn"
+          class="btn btn-secondary"
+          title="Refresh Gallery"
         >
-        <button id="clearSearchBtn" class="clear-btn" title="Clear search" style="display: none;">✕</button>
+          🔄 Refresh
+        </button>
+      </div>
+    </section>
+
+    <!-- Main Gallery Content -->
+    <main class="main-content">
+      <!-- Loading Indicator -->
+      <div id="loadingState" class="state-container" style="display: none">
+        <div class="spinner"></div>
+        <p class="state-message">Loading catalog images...</p>
       </div>
 
-      <!-- Category Filter -->
-      <div class="select-group">
-        <label for="categoryFilter">Category:</label>
-        <select id="categoryFilter">
-          <option value="">All Categories</option>
-        </select>
+      <!-- Error State -->
+      <div
+        id="errorState"
+        class="state-container error-state"
+        style="display: none"
+      >
+        <div class="state-icon">⚠️</div>
+        <h3 class="state-title">Unable to Load Images</h3>
+        <p id="errorMessage" class="state-message">
+          Failed to connect to backend service.
+        </p>
+        <button id="retryBtn" class="btn btn-primary">Try Again</button>
       </div>
 
-      <!-- Status Filter -->
-      <div class="select-group">
-        <label for="statusFilter">Status:</label>
-        <select id="statusFilter">
-          <option value="">All Statuses</option>
-          <option value="scanned">Scanned</option>
-          <option value="classified">Classified</option>
-          <option value="needs_review">Needs Review</option>
-          <option value="approved">Approved</option>
-          <option value="organized">Organized</option>
-        </select>
+      <!-- Empty State -->
+      <div
+        id="emptyState"
+        class="state-container empty-state"
+        style="display: none"
+      >
+        <div class="state-icon">📂</div>
+        <h3 class="state-title">No Images Found</h3>
+        <p class="state-message">
+          No cataloged photos match your current filters or search query.
+        </p>
+        <button id="resetFiltersBtn" class="btn btn-secondary">
+          Clear Filters
+        </button>
       </div>
 
-      <!-- Page Size Selector -->
-      <div class="select-group">
-        <label for="pageSizeSelect">Show:</label>
-        <select id="pageSizeSelect">
-          <option value="12">12</option>
-          <option value="24" selected>24</option>
-          <option value="48">48</option>
-          <option value="96">96</option>
-        </select>
+      <!-- Gallery Grid -->
+      <div id="galleryGrid" class="gallery-grid"></div>
+    </main>
+
+    <!-- Pagination Footer -->
+    <footer class="pagination-footer">
+      <div id="paginationSummary" class="pagination-summary">
+        Showing 0 of 0 images
       </div>
+      <div class="pagination-controls">
+        <button id="firstPageBtn" class="btn btn-page" disabled>
+          ⏮ First
+        </button>
+        <button id="prevPageBtn" class="btn btn-page" disabled>◀ Prev</button>
+        <span id="pageIndicator" class="page-indicator">Page 1 of 1</span>
+        <button id="nextPageBtn" class="btn btn-page" disabled>Next ▶</button>
+        <button id="lastPageBtn" class="btn btn-page" disabled>Last ⏭</button>
+      </div>
+    </footer>
 
-      <!-- Refresh Button -->
-      <button id="refreshBtn" class="btn btn-secondary" title="Refresh Gallery">
-        🔄 Refresh
-      </button>
-    </div>
-  </section>
+    <!-- Image Detail Modal -->
+    <div id="detailModal" class="modal-backdrop" style="display: none">
+      <div
+        class="modal-card"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="modalFileName"
+      >
+        <button id="closeModalBtn" class="modal-close-btn" title="Close (Esc)">
+          ✕
+        </button>
 
-  <!-- Main Gallery Content -->
-  <main class="main-content">
-    <!-- Loading Indicator -->
-    <div id="loadingState" class="state-container" style="display: none;">
-      <div class="spinner"></div>
-      <p class="state-message">Loading catalog images...</p>
-    </div>
+        <div class="modal-body">
+          <!-- Preview Section -->
+          <div class="modal-preview-wrapper">
+            <img
+              id="modalPreviewImg"
+              class="modal-preview-img"
+              src=""
+              alt="Thumbnail preview"
+            />
+          </div>
 
-    <!-- Error State -->
-    <div id="errorState" class="state-container error-state" style="display: none;">
-      <div class="state-icon">⚠️</div>
-      <h3 class="state-title">Unable to Load Images</h3>
-      <p id="errorMessage" class="state-message">Failed to connect to backend service.</p>
-      <button id="retryBtn" class="btn btn-primary">Try Again</button>
-    </div>
+          <!-- Metadata Section -->
+          <div class="modal-details-panel">
+            <h2 id="modalFileName" class="modal-filename">photo.jpg</h2>
 
-    <!-- Empty State -->
-    <div id="emptyState" class="state-container empty-state" style="display: none;">
-      <div class="state-icon">📂</div>
-      <h3 class="state-title">No Images Found</h3>
-      <p class="state-message">No cataloged photos match your current filters or search query.</p>
-      <button id="resetFiltersBtn" class="btn btn-secondary">Clear Filters</button>
-    </div>
+            <div class="modal-badge-row">
+              <span id="modalCategoryBadge" class="badge badge-category"
+                >Uncategorized</span
+              >
+              <span id="modalStatusBadge" class="badge badge-status"
+                >Scanned</span
+              >
+              <span id="modalFormatBadge" class="badge badge-format">JPEG</span>
+            </div>
 
-    <!-- Gallery Grid -->
-    <div id="galleryGrid" class="gallery-grid"></div>
-  </main>
+            <div class="details-table">
+              <div class="detail-row">
+                <span class="detail-label">Catalog ID</span>
+                <span id="modalDetailId" class="detail-val">-</span>
+              </div>
+              <div class="detail-row">
+                <span class="detail-label">Dimensions</span>
+                <span id="modalDetailDims" class="detail-val">-</span>
+              </div>
+              <div class="detail-row">
+                <span class="detail-label">File Size</span>
+                <span id="modalDetailSize" class="detail-val">-</span>
+              </div>
+              <div class="detail-row">
+                <span class="detail-label">Date Taken (EXIF)</span>
+                <span id="modalDetailDateTaken" class="detail-val">-</span>
+              </div>
+              <div class="detail-row">
+                <span class="detail-label">Last Modified</span>
+                <span id="modalDetailDateModified" class="detail-val">-</span>
+              </div>
+            </div>
 
-  <!-- Pagination Footer -->
-  <footer class="pagination-footer">
-    <div id="paginationSummary" class="pagination-summary">
-      Showing 0 of 0 images
-    </div>
-    <div class="pagination-controls">
-      <button id="firstPageBtn" class="btn btn-page" disabled>⏮ First</button>
-      <button id="prevPageBtn" class="btn btn-page" disabled>◀ Prev</button>
-      <span id="pageIndicator" class="page-indicator">Page 1 of 1</span>
-      <button id="nextPageBtn" class="btn btn-page" disabled>Next ▶</button>
-      <button id="lastPageBtn" class="btn btn-page" disabled>Last ⏭</button>
-    </div>
-  </footer>
-
-  <!-- Image Detail Modal -->
-  <div id="detailModal" class="modal-backdrop" style="display: none;">
-    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="modalFileName">
-      <button id="closeModalBtn" class="modal-close-btn" title="Close (Esc)">✕</button>
-      
-      <div class="modal-body">
-        <!-- Preview Section -->
-        <div class="modal-preview-wrapper">
-          <img id="modalPreviewImg" class="modal-preview-img" src="" alt="Thumbnail preview">
+            <!-- Navigation buttons within modal -->
+            <div class="modal-nav-row">
+              <button id="modalPrevBtn" class="btn btn-secondary">
+                ◀ Previous
+              </button>
+              <span id="modalPosition" class="modal-position-indicator"
+                >1 / 1</span
+              >
+              <button id="modalNextBtn" class="btn btn-secondary">
+                Next ▶
+              </button>
+            </div>
+          </div>
         </div>
-
-        <!-- Metadata Section -->
-        <div class="modal-details-panel">
-          <h2 id="modalFileName" class="modal-filename">photo.jpg</h2>
-          
-          <div class="modal-badge-row">
-            <span id="modalCategoryBadge" class="badge badge-category">Uncategorized</span>
-            <span id="modalStatusBadge" class="badge badge-status">Scanned</span>
-            <span id="modalFormatBadge" class="badge badge-format">JPEG</span>
-          </div>
-
-          <div class="details-table">
-            <div class="detail-row">
-              <span class="detail-label">Catalog ID</span>
-              <span id="modalDetailId" class="detail-val">-</span>
-            </div>
-            <div class="detail-row">
-              <span class="detail-label">Dimensions</span>
-              <span id="modalDetailDims" class="detail-val">-</span>
-            </div>
-            <div class="detail-row">
-              <span class="detail-label">File Size</span>
-              <span id="modalDetailSize" class="detail-val">-</span>
-            </div>
-            <div class="detail-row">
-              <span class="detail-label">Date Taken (EXIF)</span>
-              <span id="modalDetailDateTaken" class="detail-val">-</span>
-            </div>
-            <div class="detail-row">
-              <span class="detail-label">Last Modified</span>
-              <span id="modalDetailDateModified" class="detail-val">-</span>
-            </div>
-          </div>
-
-          <!-- Navigation buttons within modal -->
-          <div class="modal-nav-row">
-            <button id="modalPrevBtn" class="btn btn-secondary">◀ Previous</button>
-            <span id="modalPosition" class="modal-position-indicator">1 / 1</span>
-            <button id="modalNextBtn" class="btn btn-secondary">Next ▶</button>
-          </div>
-        </div>
       </div>
     </div>
-  </div>
 
-  <script src="/app.js"></script>
-</body>
+    <script src="/app.js"></script>
+  </body>
 </html>

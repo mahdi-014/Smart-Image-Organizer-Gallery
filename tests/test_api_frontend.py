@@ -102,3 +102,4 @@ def test_frontend_full_api_workflow(client: TestClient, temp_db: Path):
     empty_data = empty_res.json()
     assert empty_data["total"] == 0
     assert empty_data["items"] == []
+

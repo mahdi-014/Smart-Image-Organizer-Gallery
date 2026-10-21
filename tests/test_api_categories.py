@@ -52,7 +52,7 @@ def test_root_serves_html_frontend(client: TestClient):
     response = client.get("/")
     assert response.status_code == 200
     assert "text/html" in response.headers.get("content-type", "")
-    assert "<!DOCTYPE html>" in response.text
+    assert "<!doctype html>" in response.text.lower()
     assert "Smart Image Organizer & Gallery" in response.text
 
 
@@ -68,3 +68,4 @@ def test_static_assets_are_served(client: TestClient):
     assert js_res.status_code == 200
     content_type = js_res.headers.get("content-type", "")
     assert ("javascript" in content_type or "text/plain" in content_type)
+
