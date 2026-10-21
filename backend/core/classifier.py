@@ -1,29 +1,34 @@
 """
-Local AI Vision Classifier and Semantic Description Engine.
+Local MobileCLIP-S0 zero-shot image classifier.
 
-Performs zero-shot image classification, subcategory refinement,
-and content-aware natural-language visual description generation
-using local image feature analysis and category anchor prompts.
-Supports confidence scoring, margin thresholds, and Needs Review routing.
+Categories and fine-grained semantic labels are selected by comparing the actual
+image embedding with text-prompt embeddings from a pretrained vision-language
+model. Descriptions are selected labels, not free-form generated captions.
 """
 
-import os
+from __future__ import annotations
+
 import json
 import logging
-from pathlib import Path
-from typing import Dict, List, Optional, Any, Tuple
 from dataclasses import dataclass, field
-from PIL import Image, ImageStat, ImageFilter
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Sequence, Tuple
+
+from PIL import Image
 
 from config.settings import settings
-from backend.db.session import db_session, get_connection
+from backend.db.session import db_session
 from backend.db import repository
 from backend.core.renamer import generate_semantic_filename
+from backend.core.vision_model import (
+    LOGIT_SCALE,
+    MODEL_NAME,
+    MobileCLIPModel,
+    VisionModelUnavailableError,
+)
 
 logger = logging.getLogger("backend.core.classifier")
 
-
-# Subcategory mappings for fine-grained folder generation
 SUBCATEGORY_MAP: Dict[str, List[str]] = {
     "animals_nature": ["Landscapes", "Wildlife_Pets", "Plants_Flowers"],
     "documents_scans": ["Scanned_Documents", "Receipts_Invoices", "Forms_Letters"],
@@ -40,6 +45,95 @@ SUBCATEGORY_MAP: Dict[str, List[str]] = {
     "other": ["General"],
 }
 
+# Each candidate includes a prompt for the pretrained model, a conservative
+# human-readable label for the filename, and its destination subcategory.
+# These are intentionally curated labels, not claims of free-form captioning.
+VISUAL_PROMPTS: Dict[str, List[Tuple[str, str, str]]] = {
+    "animals_nature": [
+        ("a photograph of a dog or puppy outdoors", "dog outdoors", "Wildlife_Pets"),
+        ("a photograph of a cat", "cat portrait", "Wildlife_Pets"),
+        ("a photograph of a bird in nature", "bird outdoors", "Wildlife_Pets"),
+        ("a photograph of a wild animal", "wildlife photograph", "Wildlife_Pets"),
+        ("a scenic mountain lake landscape", "mountain lake landscape", "Landscapes"),
+        ("a photograph of a green forest and trees", "green forest landscape", "Landscapes"),
+        ("a photograph of a beach and ocean", "beach ocean landscape", "Landscapes"),
+        ("a close-up photograph of flowers and plants", "flowers and plants", "Plants_Flowers"),
+        ("a photograph of green grass and foliage", "green foliage outdoors", "Plants_Flowers"),
+    ],
+    "documents_scans": [
+        ("a scanned paper document with printed text", "scanned paper document", "Scanned_Documents"),
+        ("a printed receipt or invoice with item lines", "receipt invoice document", "Receipts_Invoices"),
+        ("a filled paper form or official letter", "paper form letter", "Forms_Letters"),
+        ("handwritten notes on paper", "handwritten notes", "Scanned_Documents"),
+        ("a page from a printed book", "printed book page", "Scanned_Documents"),
+    ],
+    "screenshots_ui": [
+        ("a computer terminal or code editor showing source code and logs", "terminal code screenshot", "Desktop_UI"),
+        ("a desktop software application user interface", "desktop software screenshot", "Desktop_UI"),
+        ("a smartphone mobile application screenshot", "mobile app screenshot", "Mobile_Screenshots"),
+        ("a website displayed in a browser window", "website interface screenshot", "App_Interfaces"),
+        ("a software dashboard with charts and panels", "software dashboard screenshot", "App_Interfaces"),
+    ],
+    "people_portraits": [
+        ("a close-up portrait photograph of one person", "person portrait", "Portraits"),
+        ("a family or group photograph with several people", "family group photo", "Group_Photos"),
+        ("a wedding couple portrait", "wedding couple portrait", "Portraits"),
+        ("a candid photograph of people interacting", "candid people photo", "Candid"),
+    ],
+    "food_cooking": [
+        ("a plated cooked meal on a dining plate", "plated food meal", "Plated_Meals"),
+        ("a chocolate cake pastry or dessert", "chocolate cake dessert", "Baking_Desserts"),
+        ("a cup of coffee tea or another beverage", "coffee tea beverage", "Beverages"),
+        ("fresh fruit and vegetables arranged as food", "fresh fruits vegetables", "Plated_Meals"),
+        ("a close-up photograph of bread or baked goods", "bread baked goods", "Baking_Desserts"),
+    ],
+    "products_ecommerce": [
+        ("an electronic product such as a phone headphones or computer accessory", "electronic product", "Merchandise"),
+        ("a cosmetic skincare or beauty product", "cosmetic beauty product", "Packaged_Goods"),
+        ("clothing shoes or a fashion accessory for sale", "clothing fashion product", "Merchandise"),
+        ("a packaged retail product photographed on a plain background", "packaged retail product", "Packaged_Goods"),
+        ("a furniture or home decor product", "home decor product", "Retail_Items"),
+    ],
+    "places_travel": [
+        ("a photograph of a building or architectural facade", "building architecture", "Architecture"),
+        ("a city skyline with multiple buildings", "city skyline", "Cityscapes"),
+        ("a famous landmark or tourist attraction", "travel landmark", "Landmarks"),
+        ("a street scene in a town or city", "city street scene", "Cityscapes"),
+        ("a photograph of an interior room or building interior", "building interior", "Architecture"),
+    ],
+    "graphics_illustrations": [
+        ("a flat vector illustration or clip art graphic", "vector illustration", "Vector_Art"),
+        ("a digital drawing or cartoon illustration", "digital cartoon illustration", "Digital_Drawings"),
+        ("a colorful 3D rendered digital artwork", "3d digital artwork", "Digital_Drawings"),
+        ("an infographic with icons labels and diagrams", "informational infographic", "Clip_Art"),
+    ],
+    "ai_covers_thumbnails": [
+        ("a dramatic technology news cover or YouTube thumbnail", "technology news thumbnail", "Thumbnails"),
+        ("a futuristic AI robot or artificial intelligence concept artwork", "futuristic AI artwork", "Digital_Artwork"),
+        ("a dramatic video cover with a person and bold headline", "video cover thumbnail", "Thumbnails"),
+    ],
+    "social_media_designs": [
+        ("a promotional social media post design", "social media promotional post", "Banners"),
+        ("an Instagram story template or vertical social media graphic", "vertical story design", "Story_Templates"),
+        ("a marketing banner with headline and graphic elements", "marketing banner design", "Banners"),
+        ("an event poster or promotional flyer", "event poster flyer", "Banners"),
+    ],
+    "logos_icons": [
+        ("a company brand logo or wordmark", "brand logo", "Logos"),
+        ("a mobile app icon on a simple background", "mobile app icon", "App_Icons"),
+        ("a minimalist symbol or pictogram icon", "minimalist icon", "App_Icons"),
+    ],
+    "memes_quotes": [
+        ("an internet meme image with a humorous caption", "captioned internet meme", "Memes"),
+        ("a typography graphic displaying a quote", "quote typography graphic", "Quotes_Typography"),
+        ("an inspirational quote rendered as text on a background", "inspirational quote graphic", "Quotes_Typography"),
+    ],
+    "other": [
+        ("an abstract artwork with shapes and colors", "abstract artwork", "General"),
+        ("a general photograph that does not clearly fit another category", "general photograph", "General"),
+    ],
+}
+
 
 @dataclass
 class ClassificationResult:
@@ -49,7 +143,7 @@ class ClassificationResult:
     subcategory: str
     confidence: float
     margin: float
-    status: str  # 'classified' or 'needs_review'
+    status: str
     reason: Optional[str] = None
     tags: List[str] = field(default_factory=list)
     raw_scores: Dict[str, float] = field(default_factory=dict)
@@ -57,380 +151,198 @@ class ClassificationResult:
     proposed_filename: str = ""
 
 
+def _softmax(values: Sequence[float]) -> List[float]:
+    if not values:
+        return []
+    scaled = [float(value) * LOGIT_SCALE for value in values]
+    maximum = max(scaled)
+    exponentials = [__import__("math").exp(value - maximum) for value in scaled]
+    total = sum(exponentials) or 1.0
+    return [value / total for value in exponentials]
+
+
 class LocalVisionClassifier:
     """
-    Zero-shot local image classifier operating completely on the local CPU.
-    Extracts multi-zone color, texture, and structural features to classify
-    and generate content-aware descriptive filenames.
+    Zero-shot local vision-language classifier.
+
+    MobileCLIP-S0 runs locally with ONNX Runtime on CPU. It compares image
+    embeddings with the configured category prompts and a small set of
+    fine-grained prompts to propose a category and descriptive filename.
     """
 
-    def __init__(self, high_confidence_threshold: float = 0.55, min_margin: float = 0.10):
+    def __init__(
+        self,
+        high_confidence_threshold: float = 0.65,
+        min_margin: float = 0.15,
+        model: Optional[Any] = None,
+    ):
         self.high_confidence_threshold = high_confidence_threshold
         self.min_margin = min_margin
         self.categories: List[Dict[str, Any]] = []
+        self.model = model if model is not None else MobileCLIPModel()
         self._load_categories()
 
-    def _load_categories(self) -> None:
-        """Loads categories taxonomy from database or categories.yaml fallback."""
+    def _load_categories(self, db_path: Optional[Path] = None) -> None:
+        """Load the active category taxonomy from SQLite or settings fallback."""
         try:
-            with db_session() as conn:
-                db_cats = repository.get_categories(conn)
-                if db_cats:
-                    self.categories = db_cats
+            with db_session(db_path) as conn:
+                db_categories = repository.get_categories(conn)
+                if db_categories:
+                    self.categories = db_categories
                     return
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Could not load categories from the default database: %s", exc)
 
-        # Fallback to current settings categories
         self.categories = [
             {
-                "id": idx + 1,
-                "code_name": cat.code_name,
-                "display_name": cat.display_name,
-                "description": cat.description,
-                "text_prompt": cat.text_prompt,
+                "id": index + 1,
+                "code_name": category.code_name,
+                "display_name": category.display_name,
+                "description": category.description,
+                "text_prompt": category.text_prompt,
             }
-            for idx, cat in enumerate(settings.categories)
+            for index, category in enumerate(settings.categories)
         ]
 
-    def _extract_image_features(self, img: Image.Image) -> Dict[str, float]:
-        """Extracts normalized visual metrics and spatial zones from a Pillow image."""
-        rgb = img.convert("RGB")
-        width, height = rgb.size
-        aspect_ratio = width / max(1, height)
+    @staticmethod
+    def _fallback_description(category: Dict[str, Any]) -> Tuple[str, str]:
+        code = category["code_name"]
+        subcategories = SUBCATEGORY_MAP.get(code, ["General"])
+        label = category.get("display_name", code.replace("_", " ")).lower()
+        return f"{label} image", subcategories[0]
 
-        stat = ImageStat.Stat(rgb)
-        mean_r, mean_g, mean_b = stat.mean[:3]
-        std_r, std_g, std_b = stat.stddev[:3]
-
-        # Overall brightness (0 to 1)
-        brightness = (mean_r + mean_g + mean_b) / (3.0 * 255.0)
-
-        # Color saturation / colorfulness metric (stddev across RGB channels)
-        channel_variance = (
-            abs(mean_r - mean_g) + abs(mean_g - mean_b) + abs(mean_b - mean_r)
-        ) / (3.0 * 255.0)
-
-        # Contrast / dynamic range
-        contrast = (std_r + std_g + std_b) / (3.0 * 128.0)
-
-        # Edge complexity / text density check
-        small = rgb.resize((150, 150))
-        edges = small.filter(ImageFilter.FIND_EDGES)
-        edge_stat = ImageStat.Stat(edges)
-        edge_density = sum(edge_stat.mean[:3]) / (3.0 * 255.0)
-
-        # Multi-zone analysis (Top 35%, Center 40%, Bottom 35%)
-        thumb_zone = rgb.resize((60, 60))
-        w_z, h_z = thumb_zone.size
-
-        # Top zone (sky / window title / top margins)
-        top_box = (0, 0, w_z, int(h_z * 0.35))
-        top_crop = thumb_zone.crop(top_box)
-        top_stat = ImageStat.Stat(top_crop)
-        t_r, t_g, t_b = top_stat.mean[:3]
-        top_brightness = (t_r + t_g + t_b) / (3.0 * 255.0)
-        top_blue_ratio = t_b / max(1.0, (t_r + t_g + t_b))
-
-        # Bottom zone (ground / grass / bottom desk)
-        bot_box = (0, int(h_z * 0.65), w_z, h_z)
-        bot_crop = thumb_zone.crop(bot_box)
-        bot_stat = ImageStat.Stat(bot_crop)
-        b_r, b_g, b_b = bot_stat.mean[:3]
-        bottom_brightness = (b_r + b_g + b_b) / (3.0 * 255.0)
-        bottom_green_ratio = b_g / max(1.0, (b_r + b_g + b_b))
-
-        # Center box (subject focus, plate, portrait face)
-        center_box = (int(w_z * 0.25), int(h_z * 0.25), int(w_z * 0.75), int(h_z * 0.75))
-        center_crop = thumb_zone.crop(center_box)
-        center_stat = ImageStat.Stat(center_crop)
-        c_r, c_g, c_b = center_stat.mean[:3]
-        center_brightness = (c_r + c_g + c_b) / (3.0 * 255.0)
-        center_warmth = max(0.0, (c_r - c_b) / 255.0) if c_r > c_b else 0.0
-        center_darkness = 1.0 - center_brightness
-
-        return {
-            "brightness": brightness,
-            "channel_variance": channel_variance,
-            "contrast": contrast,
-            "edge_density": edge_density,
-            "aspect_ratio": aspect_ratio,
-            "mean_r": mean_r,
-            "mean_g": mean_g,
-            "mean_b": mean_b,
-            "top_brightness": top_brightness,
-            "top_blue_ratio": top_blue_ratio,
-            "bottom_brightness": bottom_brightness,
-            "bottom_green_ratio": bottom_green_ratio,
-            "center_warmth": center_warmth,
-            "center_darkness": center_darkness,
-            "center_brightness": center_brightness,
-        }
-
-    def _score_category(self, code: str, features: Dict[str, float]) -> float:
-        """
-        Computes an affinity score for each configured category based on
-        extracted visual image characteristics and prompt heuristics.
-        """
-        b = features["brightness"]
-        cv = features["channel_variance"]
-        ed = features["edge_density"]
-        ar = features["aspect_ratio"]
-        r = features["mean_r"]
-        g = features["mean_g"]
-        bl = features["mean_b"]
-        top_blue = features["top_blue_ratio"]
-        bot_green = features["bottom_green_ratio"]
-        warmth = features["center_warmth"]
-
-        score = 0.10
-
-        if code == "documents_scans":
-            # Scanned paper: high overall brightness, low color variance, high text edge density
-            if b > 0.72 and cv < 0.12:
-                score += 0.70
-                if ed > 0.08:
-                    score += 0.25
-                if 0.5 <= ar <= 0.95:  # Portrait document aspect ratio
-                    score += 0.15
-            elif b > 0.65 and cv < 0.08 and ed > 0.12:
-                score += 0.60
-        elif code == "screenshots_ui":
-            # Dark console or light desktop/mobile UI
-            if b < 0.35 and ed > 0.05 and 1.1 <= ar <= 2.4:
-                # Dark terminal / code window
-                score += 0.85
-            elif 1.2 <= ar <= 2.2 and ed > 0.12 and cv > 0.04:
-                # Desktop application screenshot
-                score += 0.75
-            elif 0.4 <= ar <= 0.65 and ed > 0.10:
-                # Mobile app screenshot
-                score += 0.65
-        elif code == "animals_nature":
-            # Nature: strong green ground or blue sky or nature foliage
-            if (bot_green > 0.38 or (g > r and g > bl)) and cv > 0.06:
-                score += 0.75
-            elif top_blue > 0.40 and cv > 0.06:
-                score += 0.70
-            elif bot_green > 0.34 and top_blue > 0.34:
-                score += 0.85
-        elif code == "food_cooking":
-            # Food: warm colors (warm center, red/yellow meal tones), moderate variance, not pure white document
-            if warmth > 0.20 and cv > 0.08 and (b < 0.88 or cv > 0.12):
-                score += 0.75
-            elif r > bl and (r + g) > (2 * bl) and cv > 0.10 and b < 0.85:
-                score += 0.65
-        elif code == "products_ecommerce":
-            # Isolated product on pure white background
-            if b > 0.88 and cv < 0.12 and ed < 0.08:
-                score += 0.55
-        elif code == "people_portraits":
-            # Portrait aspect ratio and warm skin tones
-            if 0.6 <= ar <= 0.9:
-                score += 0.40
-            if warmth > 0.15 and cv > 0.08:
-                score += 0.40
-        elif code == "logos_icons":
-            # High contrast, square aspect ratio
-            if 0.9 <= ar <= 1.1 and features["contrast"] > 0.40:
-                score += 0.50
-        elif code == "graphics_illustrations":
-            if cv > 0.20 and features["contrast"] > 0.50:
-                score += 0.45
-        elif code == "ai_covers_thumbnails":
-            if features["contrast"] > 0.60 and cv > 0.25:
-                score += 0.45
-        elif code == "memes_quotes":
-            if ed > 0.20 and (b > 0.60 or b < 0.30):
-                score += 0.40
-        elif code == "places_travel":
-            if 1.2 <= ar <= 1.8 and cv > 0.10:
-                score += 0.45
-        else:
-            score = 0.15
-
-        return max(0.05, score)
-
-    def _determine_subcategory(self, code: str, features: Dict[str, float]) -> str:
-        """Selects a sensible subcategory based on refined image signals."""
-        subs = SUBCATEGORY_MAP.get(code, ["General"])
-        if not subs:
-            return "General"
-
-        b = features["brightness"]
-        ar = features["aspect_ratio"]
-        ed = features["edge_density"]
-        bot_green = features["bottom_green_ratio"]
-        top_blue = features["top_blue_ratio"]
-
-        if code == "animals_nature":
-            if bot_green > 0.35 and top_blue > 0.35:
-                return "Landscapes"
-            elif bot_green > 0.38:
-                return "Plants_Flowers"
-            else:
-                return "Wildlife_Pets"
-        elif code == "documents_scans":
-            return "Receipts_Invoices" if ed > 0.20 else "Scanned_Documents"
-        elif code == "screenshots_ui":
-            if ar < 0.8:
-                return "Mobile_Screenshots"
-            return "Desktop_UI"
-        elif code == "people_portraits":
-            return "Portraits" if ar < 1.0 else "Group_Photos"
-        elif code == "food_cooking":
-            return "Baking_Desserts" if features["center_darkness"] > 0.45 else "Plated_Meals"
-        elif code == "places_travel":
-            return "Architecture" if ed > 0.12 else "Cityscapes"
-
-        return subs[0]
-
-    def _generate_visual_description(
+    def _select_visual_label(
         self,
-        code: str,
-        subcategory: str,
-        features: Dict[str, float],
-    ) -> str:
-        """
-        Synthesizes a descriptive natural-language caption based on extracted
-        visual elements (subjects, environment, dominant colors, and layout).
-        """
-        b = features["brightness"]
-        ar = features["aspect_ratio"]
-        ed = features["edge_density"]
-        top_blue = features["top_blue_ratio"]
-        bot_green = features["bottom_green_ratio"]
+        image: Image.Image,
+        category: Dict[str, Any],
+    ) -> Tuple[str, str]:
+        candidates = VISUAL_PROMPTS.get(category["code_name"], [])
+        if not candidates:
+            return self._fallback_description(category)
 
-        if code == "documents_scans":
-            if subcategory == "Receipts_Invoices" or ed > 0.20:
-                return "scanned receipt invoice document"
-            return "scanned paper document form"
+        prompts = [candidate[0] for candidate in candidates]
+        similarities = self.model.score_texts(image, prompts)
+        ranked = sorted(
+            zip(candidates, similarities),
+            key=lambda item: item[1],
+            reverse=True,
+        )
+        best_candidate, best_similarity = ranked[0]
+        second_similarity = ranked[1][1] if len(ranked) > 1 else -1.0
 
-        elif code == "screenshots_ui":
-            if b < 0.35:
-                return "terminal console code build error log"
-            elif ar < 0.8:
-                return "mobile smartphone application interface screenshot"
-            return "desktop application user interface screenshot"
+        # Avoid overly specific labels when the visual-language match is weak.
+        if best_similarity < 0.15 or (best_similarity - second_similarity) < 0.01:
+            return self._fallback_description(category)
 
-        elif code == "animals_nature":
-            if subcategory == "Landscapes" or (top_blue > 0.30 and bot_green > 0.30):
-                return "scenic mountain lake nature landscape at sunset"
-            elif bot_green > 0.35:
-                return "lush green nature foliage and grass landscape"
-            elif subcategory == "Wildlife_Pets":
-                return "golden retriever dog on green grass outdoors"
-            return "nature outdoor landscape scenery"
-
-        elif code == "food_cooking":
-            if subcategory == "Baking_Desserts" or features["center_darkness"] > 0.45:
-                return "chocolate cake dessert pastry dish"
-            return "delicious plated meal food dish"
-
-        elif code == "people_portraits":
-            if subcategory == "Portraits" or ar < 1.0:
-                return "portrait person headshot photograph"
-            return "group of people gathering photo"
-
-        elif code == "places_travel":
-            return "modern architecture building cityscape view"
-
-        elif code == "logos_icons":
-            return "brand logo emblem icon graphic"
-
-        elif code == "graphics_illustrations":
-            return "vector graphic digital illustration design"
-
-        return "curated visual photograph"
+        return best_candidate[1], best_candidate[2]
 
     def classify_single_image(
         self,
         image_path: Path,
         original_filename: Optional[str] = None,
     ) -> ClassificationResult:
-        """Analyzes an image and returns a typed ClassificationResult with proposed filename."""
+        """Analyze actual image pixels using MobileCLIP and propose a safe filename."""
         if not self.categories:
             self._load_categories()
+        if not self.categories:
+            raise RuntimeError("No image categories are configured in config/categories.yaml.")
 
-        try:
-            with Image.open(image_path) as img:
-                features = self._extract_image_features(img)
-        except Exception as e:
-            logger.warning(f"Error opening image {image_path} for classification: {e}")
-            features = {
-                "brightness": 0.5,
-                "channel_variance": 0.1,
-                "contrast": 0.3,
-                "edge_density": 0.1,
-                "aspect_ratio": 1.0,
-                "mean_r": 128.0,
-                "mean_g": 128.0,
-                "mean_b": 128.0,
-                "top_brightness": 0.5,
-                "top_blue_ratio": 0.33,
-                "bottom_brightness": 0.5,
-                "bottom_green_ratio": 0.33,
-                "center_warmth": 0.1,
-                "center_darkness": 0.5,
-                "center_brightness": 0.5,
-            }
-
-        # Calculate raw scores for all categories
-        scored_cats: List[Tuple[Dict[str, Any], float]] = []
-        for cat in self.categories:
-            score = self._score_category(cat["code_name"], features)
-            scored_cats.append((cat, score))
-
-        # Sort descending by score
-        scored_cats.sort(key=lambda x: x[1], reverse=True)
-
-        total_score = sum(s for _, s in scored_cats) or 1.0
-        top_cat, top_raw = scored_cats[0]
-        second_raw = scored_cats[1][1] if len(scored_cats) > 1 else 0.0
-
-        confidence = round(min(1.0, top_raw / total_score * 2.2), 3)
-        margin = round(max(0.0, (top_raw - second_raw) / total_score), 3)
-
-        raw_scores_dict = {
-            c["code_name"]: round(s / total_score, 3) for c, s in scored_cats[:5]
-        }
-
-        subcategory = self._determine_subcategory(top_cat["code_name"], features)
-
-        # Status decision gate
-        if confidence >= self.high_confidence_threshold and margin >= self.min_margin:
-            status = "classified"
-            reason = None
-        else:
-            status = "needs_review"
-            reason = "low_confidence" if confidence < self.high_confidence_threshold else "ambiguous_margin"
-
-        tags = [top_cat["code_name"], subcategory]
-
-        # Natural language visual description
-        visual_desc = self._generate_visual_description(top_cat["code_name"], subcategory, features)
-
-        # Semantic filename (lowercase, kebab-case, safe Windows name, original extension)
         source_name = original_filename or image_path.name
+        try:
+            with Image.open(image_path) as source:
+                image = source.convert("RGB").copy()
+        except Exception as exc:
+            logger.warning("Cannot decode image %s for AI classification: %s", image_path, exc)
+            fallback = next(
+                (category for category in self.categories if category["code_name"] == "other"),
+                self.categories[-1],
+            )
+            proposed = generate_semantic_filename(
+                description="unreadable image file",
+                original_filename=source_name,
+                category_name=fallback["display_name"],
+                subcategory="General",
+            )
+            return ClassificationResult(
+                category_id=fallback["id"],
+                category_code=fallback["code_name"],
+                category_name=fallback["display_name"],
+                subcategory="General",
+                confidence=0.0,
+                margin=0.0,
+                status="needs_review",
+                reason="image_decode_error",
+                tags=[fallback["code_name"]],
+                raw_scores={},
+                visual_description="image could not be decoded",
+                proposed_filename=proposed,
+            )
+
+        category_prompts = [
+            str(category.get("text_prompt") or category.get("description") or category["display_name"])
+            for category in self.categories
+        ]
+        similarities = self.model.score_texts(image, category_prompts)
+        if len(similarities) != len(self.categories):
+            raise RuntimeError("The vision model returned an unexpected number of category scores.")
+
+        probabilities = _softmax(similarities)
+        ranked_indices = sorted(
+            range(len(self.categories)),
+            key=lambda index: similarities[index],
+            reverse=True,
+        )
+        best_index = ranked_indices[0]
+        second_index = ranked_indices[1] if len(ranked_indices) > 1 else best_index
+        best_category = self.categories[best_index]
+        confidence = probabilities[best_index]
+        margin = confidence - probabilities[second_index]
+        best_similarity = similarities[best_index]
+
+        if best_similarity < 0.15:
+            status, reason = "needs_review", "low_similarity"
+        elif confidence < self.high_confidence_threshold:
+            status, reason = "needs_review", "low_confidence"
+        elif margin < self.min_margin:
+            status, reason = "needs_review", "ambiguous_margin"
+        else:
+            status, reason = "classified", None
+
+        visual_description, subcategory = self._select_visual_label(image, best_category)
         proposed_filename = generate_semantic_filename(
-            description=visual_desc,
+            description=visual_description,
             original_filename=source_name,
-            category_name=top_cat["display_name"],
+            category_name=best_category["display_name"],
             subcategory=subcategory,
         )
 
+        ranked_categories = sorted(
+            zip(self.categories, probabilities),
+            key=lambda item: item[1],
+            reverse=True,
+        )
+        raw_scores = {
+            category["code_name"]: round(probability, 4)
+            for category, probability in ranked_categories[:5]
+        }
+        tags = [best_category["code_name"], subcategory]
+        tags.extend(
+            word for word in visual_description.split()
+            if len(word) > 3 and word not in tags
+        )
+
         return ClassificationResult(
-            category_id=top_cat["id"],
-            category_code=top_cat["code_name"],
-            category_name=top_cat["display_name"],
+            category_id=best_category["id"],
+            category_code=best_category["code_name"],
+            category_name=best_category["display_name"],
             subcategory=subcategory,
-            confidence=confidence,
-            margin=margin,
+            confidence=round(float(confidence), 4),
+            margin=round(float(margin), 4),
             status=status,
             reason=reason,
             tags=tags,
-            raw_scores=raw_scores_dict,
-            visual_description=visual_desc,
+            raw_scores=raw_scores,
+            visual_description=visual_description,
             proposed_filename=proposed_filename,
         )
 
@@ -441,82 +353,128 @@ class LocalVisionClassifier:
         progress_callback: Optional[Any] = None,
     ) -> Dict[str, int]:
         """
-        Classifies all unclassified images in the SQLite catalog and updates records,
-        persisting both predicted categories and content-aware proposed filenames.
-        """
-        self._load_categories()
+        Classify images not yet processed by this model version.
 
+        Older heuristic-generated classifications are eligible for reprocessing.
+        Approved/organized images are left alone, and filenames explicitly edited
+        by a user are preserved.
+        """
+        self._load_categories(db_path)
+        if not settings.enable_local_ai and self.model.__class__ is MobileCLIPModel:
+            raise VisionModelUnavailableError("Local AI is disabled by ENABLE_LOCAL_AI=false.")
         total_processed = 0
         classified_count = 0
         needs_review_count = 0
 
         with db_session(db_path) as conn:
             cursor = conn.cursor()
-            # Select unclassified images
             cursor.execute(
-                "SELECT id, file_path, file_name, thumbnail_path, status, proposed_filename, visual_description FROM images WHERE status IN ('scanned', 'needs_review')"
+                """
+                SELECT i.id, i.file_path, i.file_name, i.thumbnail_path, i.status,
+                       i.proposed_filename, i.visual_description, i.filename_is_manual
+                FROM images AS i
+                WHERE i.status IN ('scanned', 'needs_review', 'classified')
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM image_classifications AS c
+                      WHERE c.image_id = i.id
+                        AND c.provider = 'local_mobileclip'
+                        AND c.model_name = ?
+                  )
+                ORDER BY i.id ASC
+                """,
+                (MODEL_NAME,),
             )
-            rows = [dict(r) for r in cursor.fetchall()]
+            rows = [dict(row) for row in cursor.fetchall()]
 
             for item in rows:
-                img_id = item["id"]
-                file_path = Path(item["file_path"])
-                thumb_path = Path(item["thumbnail_path"]) if item.get("thumbnail_path") else None
-
-                # Use thumbnail if it exists for faster I/O, otherwise fallback to original image
-                eval_path = thumb_path if (thumb_path and thumb_path.exists()) else file_path
-                if not eval_path.exists():
+                image_id = item["id"]
+                source_path = Path(item["file_path"])
+                thumbnail_path = Path(item["thumbnail_path"]) if item.get("thumbnail_path") else None
+                evaluation_path = (
+                    thumbnail_path
+                    if thumbnail_path is not None and thumbnail_path.is_file()
+                    else source_path
+                )
+                if not evaluation_path.is_file():
+                    logger.warning("Skipping missing image during classification: %s", source_path)
                     continue
 
-                res = self.classify_single_image(eval_path, original_filename=item["file_name"])
+                result = self.classify_single_image(
+                    evaluation_path,
+                    original_filename=item["file_name"],
+                )
 
-                # Record in image_classifications
                 cursor.execute(
                     """
                     INSERT INTO image_classifications (
                         image_id, provider, model_name, predicted_category_id,
                         confidence_score, margin_score, raw_scores_json, suggested_tags_json
-                    ) VALUES (?, 'local_ai', 'vision_feature_v2', ?, ?, ?, ?, ?)
+                    ) VALUES (?, 'local_mobileclip', ?, ?, ?, ?, ?, ?)
                     """,
                     (
-                        img_id,
-                        res.category_id,
-                        res.confidence,
-                        res.margin,
-                        json.dumps(res.raw_scores),
-                        json.dumps(res.tags),
+                        image_id,
+                        MODEL_NAME,
+                        result.category_id,
+                        result.confidence,
+                        result.margin,
+                        json.dumps(result.raw_scores),
+                        json.dumps(result.tags),
                     ),
                 )
 
-                # If needs review, record into review_queue
-                if res.status == "needs_review":
+                if result.status == "needs_review":
                     cursor.execute(
                         """
                         INSERT INTO review_queue (image_id, reason, is_resolved)
-                        VALUES (?, ?, 0)
+                        SELECT ?, ?, 0
+                        WHERE NOT EXISTS (
+                            SELECT 1 FROM review_queue
+                            WHERE image_id = ? AND is_resolved = 0
+                        )
                         """,
-                        (img_id, res.reason or "low_confidence"),
+                        (image_id, result.reason or "low_confidence", image_id),
                     )
                     needs_review_count += 1
                 else:
                     classified_count += 1
+                    # Close stale model-generated review items when a newer model
+                    # version now classifies the image with sufficient confidence.
+                    cursor.execute(
+                        """
+                        UPDATE review_queue
+                        SET is_resolved = 1, resolved_at = DATETIME('now')
+                        WHERE image_id = ? AND is_resolved = 0
+                          AND reason IN ('low_confidence', 'ambiguous_margin', 'low_similarity')
+                        """,
+                        (image_id,),
+                    )
 
-                # Update images table with category, status, proposed_filename, and visual_description
+                proposed_filename = (
+                    item["proposed_filename"]
+                    if item.get("filename_is_manual") and item.get("proposed_filename")
+                    else result.proposed_filename
+                )
                 cursor.execute(
                     """
                     UPDATE images
                     SET status = ?,
                         primary_category_id = ?,
-                        proposed_filename = COALESCE(proposed_filename, ?),
-                        visual_description = COALESCE(visual_description, ?),
+                        proposed_filename = ?,
+                        visual_description = ?,
                         updated_at = DATETIME('now')
                     WHERE id = ?
                     """,
-                    (res.status, res.category_id, res.proposed_filename, res.visual_description, img_id),
+                    (
+                        result.status,
+                        result.category_id,
+                        proposed_filename,
+                        result.visual_description,
+                        image_id,
+                    ),
                 )
 
                 total_processed += 1
-
                 if progress_callback:
                     progress_callback({
                         "processed": total_processed,

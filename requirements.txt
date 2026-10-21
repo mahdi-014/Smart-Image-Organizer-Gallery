@@ -8,7 +8,11 @@ pyyaml>=6.0.2
 # Image Processing & Metadata
 pillow>=10.4.0
 
+# Local MobileCLIP-S0 ONNX vision-language inference
+numpy>=1.26.0
+onnxruntime>=1.20.0
+tokenizers>=0.21.0
+
 # Testing
 pytest>=8.3.0
 httpx>=0.27.0
-
