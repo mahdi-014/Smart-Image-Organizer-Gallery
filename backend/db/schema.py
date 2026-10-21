@@ -5,7 +5,7 @@ Contains DDL statements for creating the tables, indices, and views
 required by the Smart Image Organizer & Gallery application.
 """
 
-CURRENT_SCHEMA_VERSION = 1
+CURRENT_SCHEMA_VERSION = 2
 
 SCHEMA_SQL = """
 -- 1. Categories Table (Configurable Taxonomy)
@@ -34,6 +34,8 @@ CREATE TABLE IF NOT EXISTS images (
     thumbnail_path TEXT,                     -- Path to pre-rendered small WebP thumbnail
     status TEXT NOT NULL DEFAULT 'scanned',  -- 'scanned', 'classified', 'needs_review', 'approved', 'organized'
     primary_category_id INTEGER REFERENCES categories(id) ON DELETE SET NULL,
+    proposed_filename TEXT,                  -- Content-aware semantic filename (e.g. 'golden-retriever-on-grass.jpg')
+    visual_description TEXT,                 -- Natural-language visual content summary
     created_at TEXT NOT NULL DEFAULT (DATETIME('now')),
     updated_at TEXT NOT NULL DEFAULT (DATETIME('now'))
 );

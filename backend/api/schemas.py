@@ -45,6 +45,8 @@ class ImageItemResponse(BaseModel):
     category_name: Optional[str] = None
     category_code: Optional[str] = None
     has_thumbnail: bool
+    proposed_filename: Optional[str] = None
+    visual_description: Optional[str] = None
 
 
 class ImageListResponse(BaseModel):
@@ -137,3 +139,15 @@ class OrganizeExecuteRequest(BaseModel):
     destination_dir: str
     image_ids: Optional[List[int]] = None
     include_needs_review: bool = False
+
+
+class ImageRenameRequest(BaseModel):
+    """Request payload to manually edit the proposed semantic filename of an image."""
+    proposed_filename: str
+
+
+class ImageRenameResponse(BaseModel):
+    """Response payload confirming updated proposed filename."""
+    success: bool
+    image_id: int
+    proposed_filename: str

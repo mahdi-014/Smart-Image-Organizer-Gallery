@@ -98,6 +98,10 @@
     modalStatusBadge: document.getElementById('modalStatusBadge'),
     modalFormatBadge: document.getElementById('modalFormatBadge'),
     modalCategorySelect: document.getElementById('modalCategorySelect'),
+    modalProposedNameInput: document.getElementById('modalProposedNameInput'),
+    modalSaveNameBtn: document.getElementById('modalSaveNameBtn'),
+    modalRenameMsg: document.getElementById('modalRenameMsg'),
+    modalVisualDesc: document.getElementById('modalVisualDesc'),
     modalApproveBtn: document.getElementById('modalApproveBtn'),
     modalDetailId: document.getElementById('modalDetailId'),
     modalDetailDims: document.getElementById('modalDetailDims'),
@@ -379,11 +383,16 @@
       state.currentPlan.items.forEach((item) => {
         const tr = document.createElement('tr');
         const catLabel = item.subcategory ? `${item.category_name} / ${item.subcategory}` : item.category_name;
+        const visualSummary = item.visual_description || '-';
         tr.innerHTML = `
-          <td title="${escapeHtml(item.source_path)}">${escapeHtml(item.destination_filename)}</td>
+          <td title="${escapeHtml(item.source_path)}"><strong>${escapeHtml(item.original_filename || item.destination_filename)}</strong></td>
+          <td style="font-size: 0.8rem; color: #4b5563;">${escapeHtml(visualSummary)}</td>
           <td><span class="badge badge-category">${escapeHtml(catLabel)}</span></td>
-          <td style="font-family: monospace; font-size: 0.75rem;" title="${escapeHtml(item.destination_path)}">${escapeHtml(item.destination_path)}</td>
-          <td>${item.collision_detected ? '<span class="badge badge-status-needs_review">Collision Renamed</span>' : '<span class="badge badge-status">Ready</span>'}</td>
+          <td style="font-family: monospace; font-size: 0.75rem;" title="${escapeHtml(item.destination_path)}">
+            <strong style="color: #2563eb;">${escapeHtml(item.destination_filename)}</strong><br>
+            <span style="color: #6b7280;">${escapeHtml(item.destination_path)}</span>
+          </td>
+          <td>${item.collision_detected ? '<span class="badge badge-status-needs_review">Collision Renamed (-2)</span>' : '<span class="badge badge-status">Ready</span>'}</td>
         `;
         elements.previewTableBody.appendChild(tr);
       });
@@ -454,6 +463,37 @@
       }
     } catch (err) {
       alert(`Explorer error: ${err.message}`);
+    }
+  }
+
+  async function saveModalProposedName() {
+    const item = state.items[state.selectedModalIndex];
+    if (!item) return;
+
+    const newName = elements.modalProposedNameInput.value.trim();
+    if (!newName) {
+      elements.modalRenameMsg.className = 'validation-msg invalid';
+      elements.modalRenameMsg.textContent = 'Filename cannot be blank.';
+      return;
+    }
+
+    try {
+      const res = await fetch(`/api/images/${item.id}/rename`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ proposed_filename: newName }),
+      });
+      if (!res.ok) throw new Error('Failed to update filename');
+      const data = await res.json();
+
+      item.proposed_filename = data.proposed_filename;
+      elements.modalProposedNameInput.value = data.proposed_filename;
+      elements.modalRenameMsg.className = 'validation-msg valid';
+      elements.modalRenameMsg.textContent = `✓ Renamed to: ${data.proposed_filename}`;
+      renderGallery();
+    } catch (err) {
+      elements.modalRenameMsg.className = 'validation-msg invalid';
+      elements.modalRenameMsg.textContent = `✗ ${err.message}`;
     }
   }
 
@@ -571,7 +611,8 @@
           }
         </div>
         <div class="card-info">
-          <div class="card-filename" title="${escapeHtml(item.file_name)}">${escapeHtml(item.file_name)}</div>
+          <div class="card-filename" title="${escapeHtml(item.proposed_filename || item.file_name)}">${escapeHtml(item.proposed_filename || item.file_name)}</div>
+          ${item.proposed_filename && item.proposed_filename !== item.file_name ? `<div class="card-orig-filename" title="Original: ${escapeHtml(item.file_name)}">Orig: ${escapeHtml(item.file_name)}</div>` : ''}
           <div class="card-meta-row">
             <span>${dims}</span>
             <span>${formatBytes(item.file_size)}</span>
@@ -636,6 +677,15 @@
     elements.modalCategoryBadge.textContent = item.category_name || 'Uncategorized';
     elements.modalStatusBadge.textContent = item.status;
     elements.modalFormatBadge.textContent = item.file_format || 'N/A';
+    if (elements.modalProposedNameInput) {
+      elements.modalProposedNameInput.value = item.proposed_filename || item.file_name;
+    }
+    if (elements.modalVisualDesc) {
+      elements.modalVisualDesc.textContent = item.visual_description || 'Analysis pending classification';
+    }
+    if (elements.modalRenameMsg) {
+      elements.modalRenameMsg.textContent = '';
+    }
 
     // Set matching select option if available
     if (item.category_name) {
@@ -694,6 +744,9 @@
 
     // Review Modal Approve
     elements.modalApproveBtn.addEventListener('click', approveCurrentModalImage);
+    if (elements.modalSaveNameBtn) {
+      elements.modalSaveNameBtn.addEventListener('click', saveModalProposedName);
+    }
 
     // Search with debounce
     let searchTimeout = null;

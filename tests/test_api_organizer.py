@@ -177,3 +177,42 @@ def test_scan_and_classify_api_workflow(client: TestClient, tmp_path: Path, temp
     cls_data = cls_res.json()
     assert cls_data["status"] == "completed"
     assert cls_data["total_processed"] >= 3
+
+
+
+def test_image_rename_api(client: TestClient, temp_db: Path):
+    """Verifies PATCH /api/images/{id}/rename sanitizes and saves custom proposed filenames."""
+    with db_session(temp_db) as conn:
+        img_id = repository.upsert_image(conn, {
+            "file_path": "C:/photos/IMG_0099.jpg",
+            "file_name": "IMG_0099.jpg",
+            "file_size": 500,
+            "file_hash_sha256": "h_rename",
+            "phash": "dummy",
+            "width": 80,
+            "height": 80,
+            "file_format": "JPEG",
+            "date_taken": None,
+            "date_modified": "2024-01-01",
+            "thumbnail_path": None,
+            "status": "scanned",
+            "primary_category_id": None,
+        })
+
+    # 1. Successful rename with custom description and punctuation
+    res = client.patch(f"/api/images/{img_id}/rename", json={"proposed_filename": "Happy Golden Retriever Running! (2026).jpg"})
+    assert res.status_code == 200
+    data = res.json()
+    assert data["success"] is True
+    assert data["proposed_filename"] == "happy-golden-retriever-running-2026.jpg"
+
+    # 2. Verify reflected in GET /api/images
+    get_res = client.get("/api/images")
+    assert get_res.status_code == 200
+    images = get_res.json()["items"]
+    matched = next(i for i in images if i["id"] == img_id)
+    assert matched["proposed_filename"] == "happy-golden-retriever-running-2026.jpg"
+
+    # 3. Nonexistent image returns 404
+    bad_res = client.patch("/api/images/999999/rename", json={"proposed_filename": "test.jpg"})
+    assert bad_res.status_code == 404

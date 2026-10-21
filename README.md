@@ -97,13 +97,16 @@ Categorized Output Folders (Byte-for-Byte Copies of Originals)
 - **Fast Content-Addressed Caching:** Serves thumbnails with HTTP `Cache-Control: public, max-age=31536000, immutable` for zero-latency local browser caching.
 - **SQLite Database with WAL Mode & Versioning:** Fully indexed database catalog featuring PRAGMA `user_version` migrations and composite query optimization (`idx_images_gallery_order`, `idx_images_cat_date`, `idx_images_status_date`).
 - **Single-Query Duplicate Grouping:** Efficient single-query subquery grouping (`WHERE file_hash_sha256 IN (...) GROUP BY ... HAVING COUNT(*) > 1`) avoiding N+1 query overhead.
+- **Content-Aware Visual Recognition & Semantic Renaming:** Decodes actual image pixels (color distributions, multi-zone spatial focus, edge frequencies, and texture complexity) to identify visual subjects, documents, UI screenshots, nature landscapes, animals, and food dishes. Synthesizes concise natural-language descriptions and generates clean, lowercase, hyphen-separated kebab-case filenames (e.g. `golden-retriever-running-on-grass.jpg`, `scanned-receipt-target-store.png`, `terminal-build-error-log.png`).
+- **Windows-Safe Filename Protection & Collision Resolution:** Guards against Windows device reserved names (`CON`, `PRN`, `AUX`, `NUL`, `COM1-9`, `LPT1-9`), strips unsafe filesystem punctuation, enforces 30–60 character bounds, preserves original file extensions, and resolves duplicate naming conflicts with `-2`, `-3` numeric suffixes without overwriting.
+- **Review & Manual Overrides:** Allows users to review AI-generated visual descriptions, customize or edit proposed filenames, and reassign categories before or after copying.
 - **Responsive Web Gallery UI:** Zero-dependency vanilla JavaScript frontend served directly at `/`, complete with debounced search, category/status filters, page size customization (12, 24, 48, 96), and keyboard-navigable image inspection modal.
 - **REST API Endpoints:**
   - `GET /api/health`: Health status and app metadata with typed Pydantic models.
   - `GET /api/categories`: Returns active taxonomies loaded from `categories.yaml`.
   - `GET /api/images`: Paginated catalog listing with search and filter parameters.
   - `GET /api/images/{image_id}/thumbnail`: Content-addressed thumbnail streaming with traversal protection.
-- **Automated Test Suite:** 100 passing pytest tests covering unit, edge-case, and end-to-end integration scenarios.
+- **Automated Test Suite:** 137 passing pytest tests covering unit, edge-case, and end-to-end integration scenarios.
 
 ---
 
@@ -162,6 +165,7 @@ Open your browser to:
 │   │   ├── hasher.py          # Streaming SHA-256 cryptographic hasher
 │   │   ├── metadata.py        # EXIF parser & WebP thumbnail generator
 │   │   ├── organizer.py       # Dry-run planner, collision resolver & copy verifier
+│   │   ├── renamer.py         # Content-aware slugification, Windows safety & collision resolution
 │   │   ├── scan_manager.py    # Background scan & classification task coordinator
 │   │   └── scanner.py         # Recursive read-only directory scanner
 │   └── db/
@@ -179,7 +183,7 @@ Open your browser to:
 ├── scripts/
 │   ├── generate_test_data.py  # Synthetic test image generator
 │   └── scan.py                # Command-line scanner runner
-├── tests/                     # Automated pytest test suite (100 tests)
+├── tests/                     # Automated pytest test suite (137 tests)
 ├── .env.example               # Environment variables template
 ├── requirements.txt           # Python package requirements
 └── README.md                  # Unified documentation and project roadmap

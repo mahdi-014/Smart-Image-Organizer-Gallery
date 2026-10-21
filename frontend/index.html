@@ -231,8 +231,9 @@
             <thead>
               <tr>
                 <th>Source File</th>
+                <th>Visual AI Description</th>
                 <th>Category / Subcategory</th>
-                <th>Proposed Destination Path</th>
+                <th>Proposed Destination & Filename</th>
                 <th>Status</th>
               </tr>
             </thead>
@@ -266,6 +267,27 @@
               <span id="modalCategoryBadge" class="badge badge-category">Uncategorized</span>
               <span id="modalStatusBadge" class="badge badge-status">Scanned</span>
               <span id="modalFormatBadge" class="badge badge-format">JPEG</span>
+            </div>
+
+            <!-- Content-Aware AI Recognition & Renaming -->
+            <div class="review-box">
+              <label for="modalProposedNameInput"><strong>Proposed Descriptive Filename:</strong></label>
+              <div class="review-controls">
+                <input
+                  type="text"
+                  id="modalProposedNameInput"
+                  class="review-input"
+                  placeholder="e.g. golden-retriever-running-on-grass.jpg"
+                  autocomplete="off"
+                />
+                <button id="modalSaveNameBtn" class="btn btn-secondary">Save Name</button>
+              </div>
+              <div id="modalRenameMsg" class="validation-msg"></div>
+            </div>
+
+            <div class="detail-row" style="margin-bottom: 0.25rem; background: var(--bg-input); padding: 0.5rem 0.75rem; border-radius: var(--radius-sm); border: 1px solid var(--border-color);">
+              <span class="detail-label">Visual AI Content:</span>
+              <span id="modalVisualDesc" class="detail-val" style="color: var(--accent-primary); font-size: 0.85rem;">-</span>
             </div>
 
             <!-- Manual Category Review & Reassign -->

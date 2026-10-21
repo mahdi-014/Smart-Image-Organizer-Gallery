@@ -185,3 +185,84 @@ def test_override_image_category_resolves_review_queue(temp_db: Path):
         rq = cursor.fetchone()
         assert rq["is_resolved"] == 1
         assert rq["resolved_category_id"] == target_cat_id
+
+
+def test_semantic_metadata_storage_and_update(temp_db: Path):
+    """Verifies storing, updating, and querying content-aware proposed_filename and visual_description."""
+    with db_session(temp_db) as conn:
+        img_id = repository.upsert_image(conn, {
+            "file_path": "C:/photos/retriever.jpg",
+            "file_name": "retriever.jpg",
+            "file_size": 4096,
+            "file_hash_sha256": "hash_retriever",
+            "phash": "dummy",
+            "width": 1920,
+            "height": 1080,
+            "file_format": "JPEG",
+            "date_taken": None,
+            "date_modified": "2024-01-01T00:00:00",
+            "thumbnail_path": None,
+            "status": "scanned",
+            "primary_category_id": None,
+            "proposed_filename": "golden-retriever-running-on-grass.jpg",
+            "visual_description": "golden retriever running on green grass outdoors",
+        })
+
+        fetched = repository.get_image_by_id(conn, img_id)
+        assert fetched is not None
+        assert fetched["proposed_filename"] == "golden-retriever-running-on-grass.jpg"
+        assert fetched["visual_description"] == "golden retriever running on green grass outdoors"
+
+        # Update proposed filename
+        success = repository.update_image_proposed_filename(conn, img_id, "happy-golden-retriever.jpg")
+        assert success is True
+
+        updated = repository.get_image_by_id(conn, img_id)
+        assert updated["proposed_filename"] == "happy-golden-retriever.jpg"
+        assert updated["visual_description"] == "golden retriever running on green grass outdoors"
+
+
+def test_schema_migration_v1_to_v2(tmp_path: Path):
+    """Verifies that an existing database at version 1 safely migrates to version 2."""
+    import sqlite3
+    from backend.db.session import migrate_db, get_schema_version, set_schema_version
+
+    db_path = tmp_path / "v1_test.db"
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+
+    # Create v1 style table without proposed_filename and visual_description
+    conn.execute("""
+        CREATE TABLE images (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            file_path TEXT NOT NULL UNIQUE,
+            file_name TEXT NOT NULL,
+            file_size INTEGER NOT NULL,
+            file_hash_sha256 TEXT NOT NULL,
+            phash TEXT,
+            width INTEGER,
+            height INTEGER,
+            file_format TEXT,
+            date_taken TEXT,
+            date_modified TEXT NOT NULL,
+            thumbnail_path TEXT,
+            status TEXT NOT NULL DEFAULT 'scanned',
+            primary_category_id INTEGER,
+            created_at TEXT NOT NULL DEFAULT (DATETIME('now')),
+            updated_at TEXT NOT NULL DEFAULT (DATETIME('now'))
+        );
+    """)
+    set_schema_version(conn, 1)
+    assert get_schema_version(conn) == 1
+
+    # Run migration
+    migrate_db(conn)
+    assert get_schema_version(conn) == 2
+
+    # Verify new columns exist
+    cursor = conn.cursor()
+    cursor.execute("PRAGMA table_info(images);")
+    cols = {row["name"] for row in cursor.fetchall()}
+    assert "proposed_filename" in cols
+    assert "visual_description" in cols
+    conn.close()

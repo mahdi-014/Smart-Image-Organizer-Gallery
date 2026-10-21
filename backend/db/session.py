@@ -83,6 +83,17 @@ def migrate_db(conn: sqlite3.Connection) -> None:
     if current_version < 1:
         conn.executescript(SCHEMA_SQL)
         set_schema_version(conn, CURRENT_SCHEMA_VERSION)
+        return
+
+    if current_version < 2:
+        cursor = conn.cursor()
+        cursor.execute("PRAGMA table_info(images);")
+        existing_cols = {row[1] for row in cursor.fetchall()}
+        if "proposed_filename" not in existing_cols:
+            conn.execute("ALTER TABLE images ADD COLUMN proposed_filename TEXT;")
+        if "visual_description" not in existing_cols:
+            conn.execute("ALTER TABLE images ADD COLUMN visual_description TEXT;")
+        set_schema_version(conn, 2)
 
 
 def init_db(db_path: Optional[Path] = None) -> None:

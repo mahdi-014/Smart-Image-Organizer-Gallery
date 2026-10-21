@@ -1,9 +1,9 @@
 """
 Safe File Organizer Engine.
 
-Performs dry-run folder structure generation, filename collision resolution,
-byte-for-byte file copies via shutil.copy2, SHA-256 copy verification,
-and audit logging in SQLite operation_logs.
+Performs dry-run folder structure generation, content-aware semantic renaming,
+filename collision resolution, byte-for-byte file copies via shutil.copy2,
+SHA-256 copy verification, and audit logging in SQLite operation_logs.
 Original source files are NEVER modified, moved, renamed, or deleted.
 """
 
@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field
 from backend.db.session import db_session
 from backend.db import repository
 from backend.core.hasher import compute_sha256
+from backend.core.renamer import resolve_filename_collision
 
 logger = logging.getLogger("backend.core.organizer")
 
@@ -25,10 +26,12 @@ logger = logging.getLogger("backend.core.organizer")
 class OrganizationPlanItem(BaseModel):
     image_id: int
     source_path: str
+    original_filename: str = ""
     destination_path: str
     destination_filename: str
     category_name: str
     subcategory: Optional[str] = None
+    visual_description: Optional[str] = None
     file_size: int
     source_hash: str
     collision_detected: bool = False
@@ -68,7 +71,8 @@ def generate_organization_plan(
 ) -> OrganizationPlan:
     """
     Generates a dry-run organization plan without touching the filesystem.
-    Calculates target paths, resolves collisions, and returns a detailed manifest.
+    Uses AI-generated semantic proposed filenames where available, resolves collisions,
+    and returns a detailed manifest.
     """
     batch_id = str(uuid.uuid4())
     dest_root = Path(destination_dir).resolve()
@@ -76,7 +80,7 @@ def generate_organization_plan(
     items: List[OrganizationPlanItem] = []
     total_bytes = 0
     categories_summary: Dict[str, int] = {}
-    assigned_dest_paths: Set[str] = set()
+    assigned_filenames_by_dir: Dict[str, Set[str]] = {}
 
     with db_session(db_path) as conn:
         cursor = conn.cursor()
@@ -109,6 +113,7 @@ def generate_organization_plan(
 
         for row in rows:
             src_path = Path(row["file_path"])
+            original_name = src_path.name
             cat_display = row.get("category_display_name") or "Needs Review"
             sanitized_cat = _sanitize_folder_name(cat_display)
 
@@ -128,29 +133,43 @@ def generate_organization_plan(
                 except Exception:
                     pass
 
-            # Target directory
+            # Target directory: dest_root / Category / Subcategory
             if subcategory and subcategory.lower() not in ("general", "uncategorized"):
                 target_dir = dest_root / sanitized_cat / subcategory
             else:
                 target_dir = dest_root / sanitized_cat
 
-            original_name = src_path.name
-            stem = src_path.stem
-            suffix = src_path.suffix
+            target_dir_key = str(target_dir.resolve())
+            alloc_set = assigned_filenames_by_dir.setdefault(target_dir_key, set())
 
-            candidate_dest = target_dir / original_name
+            proposed_name = row.get("proposed_filename")
+            visual_desc = row.get("visual_description")
+
+            if proposed_name:
+                target_stem = Path(proposed_name).stem
+                target_ext = Path(proposed_name).suffix.lower() or src_path.suffix.lower() or ".jpg"
+                candidate_filename = resolve_filename_collision(
+                    target_stem,
+                    target_ext,
+                    target_dir,
+                    allocated_names=alloc_set,
+                )
+                collision_detected = (candidate_filename != f"{target_stem}{target_ext}")
+            else:
+                # Fallback to original filename for unclassified / legacy records
+                stem = src_path.stem
+                suffix = src_path.suffix
+                candidate_filename = original_name
+                counter = 1
+                collision_detected = False
+                while candidate_filename in alloc_set or (target_dir.exists() and (target_dir / candidate_filename).exists()):
+                    collision_detected = True
+                    counter += 1
+                    candidate_filename = f"{stem} ({counter}){suffix}"
+
+            alloc_set.add(candidate_filename)
+            candidate_dest = target_dir / candidate_filename
             candidate_str = str(candidate_dest.resolve())
-
-            # Collision resolution: check assigned set AND disk
-            collision_detected = False
-            counter = 1
-            while candidate_str in assigned_dest_paths or (dest_root.exists() and candidate_dest.exists()):
-                collision_detected = True
-                counter += 1
-                candidate_dest = target_dir / f"{stem} ({counter}){suffix}"
-                candidate_str = str(candidate_dest.resolve())
-
-            assigned_dest_paths.add(candidate_str)
 
             file_size = row.get("file_size") or 0
             total_bytes += file_size
@@ -160,10 +179,12 @@ def generate_organization_plan(
                 OrganizationPlanItem(
                     image_id=row["id"],
                     source_path=str(src_path),
+                    original_filename=original_name,
                     destination_path=candidate_str,
-                    destination_filename=candidate_dest.name,
+                    destination_filename=candidate_filename,
                     category_name=sanitized_cat,
                     subcategory=subcategory,
+                    visual_description=visual_desc,
                     file_size=file_size,
                     source_hash=row["file_hash_sha256"],
                     collision_detected=collision_detected,
@@ -230,6 +251,7 @@ def execute_organization_plan(
                     batch_id=batch_id,
                     operation_type="copy_rename",
                     source_path=str(src_path),
+                    proposed_path=str(dest_path),
                     destination_path=str(dest_path),
                     image_id=item.image_id,
                     status="in_progress",
@@ -254,6 +276,7 @@ def execute_organization_plan(
                         batch_id=batch_id,
                         operation_type="copy_rename",
                         source_path=str(src_path),
+                        proposed_path=str(dest_path),
                         destination_path=str(dest_path),
                         image_id=item.image_id,
                         status="failed",
@@ -268,6 +291,7 @@ def execute_organization_plan(
                     batch_id=batch_id,
                     operation_type="copy_rename",
                     source_path=str(src_path),
+                    proposed_path=str(dest_path),
                     destination_path=str(dest_path),
                     image_id=item.image_id,
                     status="completed",
@@ -292,6 +316,7 @@ def execute_organization_plan(
                     batch_id=batch_id,
                     operation_type="copy_rename",
                     source_path=str(src_path),
+                    proposed_path=str(dest_path),
                     destination_path=str(dest_path),
                     image_id=item.image_id,
                     status="failed",

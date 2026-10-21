@@ -30,6 +30,8 @@ from backend.api.schemas import (
     CategoryOverrideResponse,
     OrganizePreviewRequest,
     OrganizeExecuteRequest,
+    ImageRenameRequest,
+    ImageRenameResponse,
 )
 from backend.db.repository import (
     list_images,
@@ -38,6 +40,7 @@ from backend.db.repository import (
     get_categories,
     override_image_category,
     get_needs_review_images,
+    update_image_proposed_filename,
 )
 from backend.core.folder_service import (
     validate_local_folder,
@@ -45,6 +48,7 @@ from backend.core.folder_service import (
     open_in_file_explorer,
     check_folder_overlap,
 )
+from backend.core.renamer import sanitize_proposed_filename
 from backend.core.scan_manager import coordinator
 from backend.core.classifier import LocalVisionClassifier
 from backend.core.organizer import (
@@ -133,6 +137,8 @@ def get_images(
             category_name=row.get("category_name"),
             category_code=row.get("category_code"),
             has_thumbnail=bool(row.get("thumbnail_path")),
+            proposed_filename=row.get("proposed_filename"),
+            visual_description=row.get("visual_description"),
         )
         for row in rows
     ]
@@ -288,6 +294,29 @@ def start_classification_route(db: sqlite3.Connection = Depends(get_read_only_db
 def get_classify_status_route() -> ClassifyStatusResponse:
     """Polls live status of background classification worker."""
     return ClassifyStatusResponse(**coordinator.get_classification_status())
+
+
+@app.patch("/api/images/{image_id}/rename", response_model=ImageRenameResponse)
+def rename_image_route(
+    image_id: int = FastPath(..., ge=1),
+    payload: ImageRenameRequest = ...,
+    db: sqlite3.Connection = Depends(get_write_db),
+) -> ImageRenameResponse:
+    """Manually edits proposed filename for an image before dry-run and copying."""
+    image = get_image_by_id(db, image_id)
+    if not image:
+        raise HTTPException(status_code=404, detail="Image not found.")
+
+    sanitized = sanitize_proposed_filename(payload.proposed_filename, original_filename=image["file_name"])
+    success = update_image_proposed_filename(db, image_id, sanitized)
+    if not success:
+        raise HTTPException(status_code=500, detail="Failed to update filename.")
+
+    return ImageRenameResponse(
+        success=True,
+        image_id=image_id,
+        proposed_filename=sanitized,
+    )
 
 
 @app.patch("/api/images/{image_id}/category", response_model=CategoryOverrideResponse)

@@ -15,16 +15,22 @@ def upsert_image(conn: sqlite3.Connection, data: Dict[str, Any]) -> int:
     Inserts or updates an image record keyed by its unique source file_path.
     Returns the integer image id.
     """
+    record = dict(data)
+    record.setdefault("proposed_filename", None)
+    record.setdefault("visual_description", None)
+
     cursor = conn.cursor()
     cursor.execute("""
         INSERT INTO images (
             file_path, file_name, file_size, file_hash_sha256, phash,
             width, height, file_format, date_taken, date_modified,
-            thumbnail_path, status, primary_category_id, updated_at
+            thumbnail_path, status, primary_category_id,
+            proposed_filename, visual_description, updated_at
         ) VALUES (
             :file_path, :file_name, :file_size, :file_hash_sha256, :phash,
             :width, :height, :file_format, :date_taken, :date_modified,
-            :thumbnail_path, :status, :primary_category_id, DATETIME('now')
+            :thumbnail_path, :status, :primary_category_id,
+            :proposed_filename, :visual_description, DATETIME('now')
         )
         ON CONFLICT(file_path) DO UPDATE SET
             file_name = excluded.file_name,
@@ -37,16 +43,52 @@ def upsert_image(conn: sqlite3.Connection, data: Dict[str, Any]) -> int:
             date_taken = excluded.date_taken,
             date_modified = excluded.date_modified,
             thumbnail_path = excluded.thumbnail_path,
+            proposed_filename = COALESCE(images.proposed_filename, excluded.proposed_filename),
+            visual_description = COALESCE(images.visual_description, excluded.visual_description),
             updated_at = DATETIME('now');
-    """, data)
-    
+    """, record)
+
     if cursor.lastrowid and cursor.lastrowid > 0:
         return cursor.lastrowid
-    
+
     # In case of update where lastrowid is not set
-    cursor.execute("SELECT id FROM images WHERE file_path = ?", (data["file_path"],))
+    cursor.execute("SELECT id FROM images WHERE file_path = ?", (record["file_path"],))
     row = cursor.fetchone()
     return row["id"] if row else 0
+
+
+def update_image_semantic_metadata(
+    conn: sqlite3.Connection,
+    image_id: int,
+    proposed_filename: Optional[str] = None,
+    visual_description: Optional[str] = None,
+) -> bool:
+    """Updates the content-aware proposed filename and visual description for an image."""
+    cursor = conn.cursor()
+    cursor.execute("""
+        UPDATE images
+        SET proposed_filename = COALESCE(?, proposed_filename),
+            visual_description = COALESCE(?, visual_description),
+            updated_at = DATETIME('now')
+        WHERE id = ?
+    """, (proposed_filename, visual_description, image_id))
+    return cursor.rowcount > 0
+
+
+def update_image_proposed_filename(
+    conn: sqlite3.Connection,
+    image_id: int,
+    proposed_filename: str,
+) -> bool:
+    """Updates only the proposed filename for an image (e.g. from user manual review edit)."""
+    cursor = conn.cursor()
+    cursor.execute("""
+        UPDATE images
+        SET proposed_filename = ?,
+            updated_at = DATETIME('now')
+        WHERE id = ?
+    """, (proposed_filename, image_id))
+    return cursor.rowcount > 0
 
 
 def get_image_by_id(conn: sqlite3.Connection, image_id: int) -> Optional[Dict[str, Any]]:
@@ -84,7 +126,7 @@ def list_images(
     offset: int = 0,
     category_id: Optional[int] = None,
     status: Optional[str] = None,
-    search_query: Optional[str] = None
+    search_query: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """
     Retrieves a paginated list of images with optional filtering.
@@ -101,8 +143,8 @@ def list_images(
         params.append(status)
 
     if search_query:
-        conditions.append("(i.file_name LIKE ? OR i.file_path LIKE ?)")
-        params.extend([f"%{search_query}%", f"%{search_query}%"])
+        conditions.append("(i.file_name LIKE ? OR i.file_path LIKE ? OR i.proposed_filename LIKE ?)")
+        params.extend([f"%{search_query}%", f"%{search_query}%", f"%{search_query}%"])
 
     where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
 
@@ -128,7 +170,7 @@ def count_images(
     conn: sqlite3.Connection,
     category_id: Optional[int] = None,
     status: Optional[str] = None,
-    search_query: Optional[str] = None
+    search_query: Optional[str] = None,
 ) -> int:
     """Returns the total number of images matching filter criteria."""
     conditions = []
@@ -143,8 +185,8 @@ def count_images(
         params.append(status)
 
     if search_query:
-        conditions.append("(file_name LIKE ? OR file_path LIKE ?)")
-        params.extend([f"%{search_query}%", f"%{search_query}%"])
+        conditions.append("(file_name LIKE ? OR file_path LIKE ? OR proposed_filename LIKE ?)")
+        params.extend([f"%{search_query}%", f"%{search_query}%", f"%{search_query}%"])
 
     where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
     query = f"SELECT COUNT(*) AS total FROM images {where_clause}"
@@ -219,7 +261,7 @@ def log_operation(
     destination_path: Optional[str] = None,
     image_id: Optional[int] = None,
     status: str = "proposed",
-    error_message: Optional[str] = None
+    error_message: Optional[str] = None,
 ) -> int:
     """Records an entry in the operation_logs table."""
     cursor = conn.cursor()
@@ -230,7 +272,6 @@ def log_operation(
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     """, (batch_id, operation_type, image_id, source_path, proposed_path, destination_path, status, error_message))
     return cursor.lastrowid or 0
-
 
 
 def get_image_paths_under_directory(conn: sqlite3.Connection, directory_path: str) -> List[str]:
@@ -259,7 +300,7 @@ def override_image_category(
     conn: sqlite3.Connection,
     image_id: int,
     category_id: int,
-    approve: bool = True
+    approve: bool = True,
 ) -> bool:
     """
     Updates the primary category of an image, optionally marking it approved,
@@ -287,7 +328,7 @@ def override_image_category(
 def get_needs_review_images(
     conn: sqlite3.Connection,
     limit: int = 50,
-    offset: int = 0
+    offset: int = 0,
 ) -> List[Dict[str, Any]]:
     """Returns list of images currently requiring manual user review."""
     cursor = conn.cursor()

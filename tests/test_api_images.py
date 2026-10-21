@@ -133,7 +133,7 @@ def test_images_populated_catalog_structure(tmp_path: Path, client: TestClient):
     expected_keys = {
         "id", "file_name", "file_size", "width", "height", "file_format",
         "date_taken", "date_modified", "status", "category_name",
-        "category_code", "has_thumbnail"
+        "category_code", "has_thumbnail", "proposed_filename", "visual_description"
     }
     assert set(first_item.keys()) == expected_keys
     assert first_item["file_format"] == "JPEG"

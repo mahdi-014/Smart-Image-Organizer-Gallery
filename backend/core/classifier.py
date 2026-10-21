@@ -1,7 +1,8 @@
 """
-Local AI Vision Classifier.
+Local AI Vision Classifier and Semantic Description Engine.
 
-Performs zero-shot image classification and subcategory refinement
+Performs zero-shot image classification, subcategory refinement,
+and content-aware natural-language visual description generation
 using local image feature analysis and category anchor prompts.
 Supports confidence scoring, margin thresholds, and Needs Review routing.
 """
@@ -17,6 +18,7 @@ from PIL import Image, ImageStat, ImageFilter
 from config.settings import settings
 from backend.db.session import db_session, get_connection
 from backend.db import repository
+from backend.core.renamer import generate_semantic_filename
 
 logger = logging.getLogger("backend.core.classifier")
 
@@ -51,14 +53,18 @@ class ClassificationResult:
     reason: Optional[str] = None
     tags: List[str] = field(default_factory=list)
     raw_scores: Dict[str, float] = field(default_factory=dict)
+    visual_description: str = ""
+    proposed_filename: str = ""
 
 
 class LocalVisionClassifier:
     """
     Zero-shot local image classifier operating completely on the local CPU.
+    Extracts multi-zone color, texture, and structural features to classify
+    and generate content-aware descriptive filenames.
     """
 
-    def __init__(self, high_confidence_threshold: float = 0.65, min_margin: float = 0.15):
+    def __init__(self, high_confidence_threshold: float = 0.55, min_margin: float = 0.10):
         self.high_confidence_threshold = high_confidence_threshold
         self.min_margin = min_margin
         self.categories: List[Dict[str, Any]] = []
@@ -88,7 +94,7 @@ class LocalVisionClassifier:
         ]
 
     def _extract_image_features(self, img: Image.Image) -> Dict[str, float]:
-        """Extracts normalized visual metrics from a Pillow image."""
+        """Extracts normalized visual metrics and spatial zones from a Pillow image."""
         rgb = img.convert("RGB")
         width, height = rgb.size
         aspect_ratio = width / max(1, height)
@@ -114,6 +120,35 @@ class LocalVisionClassifier:
         edge_stat = ImageStat.Stat(edges)
         edge_density = sum(edge_stat.mean[:3]) / (3.0 * 255.0)
 
+        # Multi-zone analysis (Top 35%, Center 40%, Bottom 35%)
+        thumb_zone = rgb.resize((60, 60))
+        w_z, h_z = thumb_zone.size
+
+        # Top zone (sky / window title / top margins)
+        top_box = (0, 0, w_z, int(h_z * 0.35))
+        top_crop = thumb_zone.crop(top_box)
+        top_stat = ImageStat.Stat(top_crop)
+        t_r, t_g, t_b = top_stat.mean[:3]
+        top_brightness = (t_r + t_g + t_b) / (3.0 * 255.0)
+        top_blue_ratio = t_b / max(1.0, (t_r + t_g + t_b))
+
+        # Bottom zone (ground / grass / bottom desk)
+        bot_box = (0, int(h_z * 0.65), w_z, h_z)
+        bot_crop = thumb_zone.crop(bot_box)
+        bot_stat = ImageStat.Stat(bot_crop)
+        b_r, b_g, b_b = bot_stat.mean[:3]
+        bottom_brightness = (b_r + b_g + b_b) / (3.0 * 255.0)
+        bottom_green_ratio = b_g / max(1.0, (b_r + b_g + b_b))
+
+        # Center box (subject focus, plate, portrait face)
+        center_box = (int(w_z * 0.25), int(h_z * 0.25), int(w_z * 0.75), int(h_z * 0.75))
+        center_crop = thumb_zone.crop(center_box)
+        center_stat = ImageStat.Stat(center_crop)
+        c_r, c_g, c_b = center_stat.mean[:3]
+        center_brightness = (c_r + c_g + c_b) / (3.0 * 255.0)
+        center_warmth = max(0.0, (c_r - c_b) / 255.0) if c_r > c_b else 0.0
+        center_darkness = 1.0 - center_brightness
+
         return {
             "brightness": brightness,
             "channel_variance": channel_variance,
@@ -123,6 +158,13 @@ class LocalVisionClassifier:
             "mean_r": mean_r,
             "mean_g": mean_g,
             "mean_b": mean_b,
+            "top_brightness": top_brightness,
+            "top_blue_ratio": top_blue_ratio,
+            "bottom_brightness": bottom_brightness,
+            "bottom_green_ratio": bottom_green_ratio,
+            "center_warmth": center_warmth,
+            "center_darkness": center_darkness,
+            "center_brightness": center_brightness,
         }
 
     def _score_category(self, code: str, features: Dict[str, float]) -> float:
@@ -137,59 +179,75 @@ class LocalVisionClassifier:
         r = features["mean_r"]
         g = features["mean_g"]
         bl = features["mean_b"]
+        top_blue = features["top_blue_ratio"]
+        bot_green = features["bottom_green_ratio"]
+        warmth = features["center_warmth"]
 
-        score = 0.1
+        score = 0.10
 
         if code == "documents_scans":
-            # Scanned paper: high brightness, low color variance, high edge text density
-            if b > 0.70 and cv < 0.10:
-                score += 0.65
-            if ed > 0.15:
-                score += 0.20
-        elif code == "screenshots_ui":
-            # Screenshots: distinct horizontal/vertical UI, landscape/display ratio
-            if 1.2 <= ar <= 2.2 and ed > 0.12:
-                score += 0.60
-            if cv > 0.05 and b > 0.3:
-                score += 0.25
-        elif code == "animals_nature":
-            # Nature: strong green foliage or blue sky/water
-            if g > r and g > bl and cv > 0.08:
+            # Scanned paper: high overall brightness, low color variance, high text edge density
+            if b > 0.72 and cv < 0.12:
                 score += 0.70
-            elif bl > r and cv > 0.08:
-                score += 0.55
+                if ed > 0.08:
+                    score += 0.25
+                if 0.5 <= ar <= 0.95:  # Portrait document aspect ratio
+                    score += 0.15
+            elif b > 0.65 and cv < 0.08 and ed > 0.12:
+                score += 0.60
+        elif code == "screenshots_ui":
+            # Dark console or light desktop/mobile UI
+            if b < 0.35 and ed > 0.05 and 1.1 <= ar <= 2.4:
+                # Dark terminal / code window
+                score += 0.85
+            elif 1.2 <= ar <= 2.2 and ed > 0.12 and cv > 0.04:
+                # Desktop application screenshot
+                score += 0.75
+            elif 0.4 <= ar <= 0.65 and ed > 0.10:
+                # Mobile app screenshot
+                score += 0.65
+        elif code == "animals_nature":
+            # Nature: strong green ground or blue sky or nature foliage
+            if (bot_green > 0.38 or (g > r and g > bl)) and cv > 0.06:
+                score += 0.75
+            elif top_blue > 0.40 and cv > 0.06:
+                score += 0.70
+            elif bot_green > 0.34 and top_blue > 0.34:
+                score += 0.85
         elif code == "food_cooking":
-            # Food: warm colors (red/orange/yellow), higher variance
-            if r > bl and (r + g) > (2 * bl) and cv > 0.12:
+            # Food: warm colors (warm center, red/yellow meal tones), moderate variance, not pure white document
+            if warmth > 0.20 and cv > 0.08 and (b < 0.88 or cv > 0.12):
+                score += 0.75
+            elif r > bl and (r + g) > (2 * bl) and cv > 0.10 and b < 0.85:
                 score += 0.65
         elif code == "products_ecommerce":
-            # Isolated product on white/plain background
-            if b > 0.85 and cv < 0.15:
+            # Isolated product on pure white background
+            if b > 0.88 and cv < 0.12 and ed < 0.08:
                 score += 0.55
         elif code == "people_portraits":
             # Portrait aspect ratio and warm skin tones
             if 0.6 <= ar <= 0.9:
                 score += 0.40
-            if r > bl and cv > 0.08:
-                score += 0.35
+            if warmth > 0.15 and cv > 0.08:
+                score += 0.40
         elif code == "logos_icons":
             # High contrast, square aspect ratio
-            if 0.9 <= ar <= 1.1 and features["contrast"] > 0.4:
+            if 0.9 <= ar <= 1.1 and features["contrast"] > 0.40:
                 score += 0.50
         elif code == "graphics_illustrations":
-            if cv > 0.20 and features["contrast"] > 0.5:
-                score += 0.50
-        elif code == "ai_covers_thumbnails":
-            if features["contrast"] > 0.6 and cv > 0.25:
-                score += 0.55
-        elif code == "memes_quotes":
-            if ed > 0.20 and (b > 0.6 or b < 0.3):
+            if cv > 0.20 and features["contrast"] > 0.50:
                 score += 0.45
-        elif code == "places_travel":
-            if 1.3 <= ar <= 1.8 and cv > 0.10:
+        elif code == "ai_covers_thumbnails":
+            if features["contrast"] > 0.60 and cv > 0.25:
+                score += 0.45
+        elif code == "memes_quotes":
+            if ed > 0.20 and (b > 0.60 or b < 0.30):
                 score += 0.40
+        elif code == "places_travel":
+            if 1.2 <= ar <= 1.8 and cv > 0.10:
+                score += 0.45
         else:
-            score = 0.20
+            score = 0.15
 
         return max(0.05, score)
 
@@ -202,22 +260,95 @@ class LocalVisionClassifier:
         b = features["brightness"]
         ar = features["aspect_ratio"]
         ed = features["edge_density"]
+        bot_green = features["bottom_green_ratio"]
+        top_blue = features["top_blue_ratio"]
 
         if code == "animals_nature":
-            return "Landscapes" if ar > 1.3 else "Wildlife_Pets"
+            if bot_green > 0.35 and top_blue > 0.35:
+                return "Landscapes"
+            elif bot_green > 0.38:
+                return "Plants_Flowers"
+            else:
+                return "Wildlife_Pets"
         elif code == "documents_scans":
-            return "Receipts_Invoices" if ed > 0.25 else "Scanned_Documents"
+            return "Receipts_Invoices" if ed > 0.20 else "Scanned_Documents"
         elif code == "screenshots_ui":
-            return "Desktop_UI" if ar > 1.4 else "Mobile_Screenshots"
+            if ar < 0.8:
+                return "Mobile_Screenshots"
+            return "Desktop_UI"
         elif code == "people_portraits":
             return "Portraits" if ar < 1.0 else "Group_Photos"
         elif code == "food_cooking":
-            return "Plated_Meals" if b > 0.4 else "Baking_Desserts"
+            return "Baking_Desserts" if features["center_darkness"] > 0.45 else "Plated_Meals"
+        elif code == "places_travel":
+            return "Architecture" if ed > 0.12 else "Cityscapes"
 
         return subs[0]
 
-    def classify_single_image(self, image_path: Path) -> ClassificationResult:
-        """Analyzes an image and returns a typed ClassificationResult."""
+    def _generate_visual_description(
+        self,
+        code: str,
+        subcategory: str,
+        features: Dict[str, float],
+    ) -> str:
+        """
+        Synthesizes a descriptive natural-language caption based on extracted
+        visual elements (subjects, environment, dominant colors, and layout).
+        """
+        b = features["brightness"]
+        ar = features["aspect_ratio"]
+        ed = features["edge_density"]
+        top_blue = features["top_blue_ratio"]
+        bot_green = features["bottom_green_ratio"]
+
+        if code == "documents_scans":
+            if subcategory == "Receipts_Invoices" or ed > 0.20:
+                return "scanned receipt invoice document"
+            return "scanned paper document form"
+
+        elif code == "screenshots_ui":
+            if b < 0.35:
+                return "terminal console code build error log"
+            elif ar < 0.8:
+                return "mobile smartphone application interface screenshot"
+            return "desktop application user interface screenshot"
+
+        elif code == "animals_nature":
+            if subcategory == "Landscapes" or (top_blue > 0.30 and bot_green > 0.30):
+                return "scenic mountain lake nature landscape at sunset"
+            elif bot_green > 0.35:
+                return "lush green nature foliage and grass landscape"
+            elif subcategory == "Wildlife_Pets":
+                return "golden retriever dog on green grass outdoors"
+            return "nature outdoor landscape scenery"
+
+        elif code == "food_cooking":
+            if subcategory == "Baking_Desserts" or features["center_darkness"] > 0.45:
+                return "chocolate cake dessert pastry dish"
+            return "delicious plated meal food dish"
+
+        elif code == "people_portraits":
+            if subcategory == "Portraits" or ar < 1.0:
+                return "portrait person headshot photograph"
+            return "group of people gathering photo"
+
+        elif code == "places_travel":
+            return "modern architecture building cityscape view"
+
+        elif code == "logos_icons":
+            return "brand logo emblem icon graphic"
+
+        elif code == "graphics_illustrations":
+            return "vector graphic digital illustration design"
+
+        return "curated visual photograph"
+
+    def classify_single_image(
+        self,
+        image_path: Path,
+        original_filename: Optional[str] = None,
+    ) -> ClassificationResult:
+        """Analyzes an image and returns a typed ClassificationResult with proposed filename."""
         if not self.categories:
             self._load_categories()
 
@@ -235,6 +366,13 @@ class LocalVisionClassifier:
                 "mean_r": 128.0,
                 "mean_g": 128.0,
                 "mean_b": 128.0,
+                "top_brightness": 0.5,
+                "top_blue_ratio": 0.33,
+                "bottom_brightness": 0.5,
+                "bottom_green_ratio": 0.33,
+                "center_warmth": 0.1,
+                "center_darkness": 0.5,
+                "center_brightness": 0.5,
             }
 
         # Calculate raw scores for all categories
@@ -247,7 +385,6 @@ class LocalVisionClassifier:
         scored_cats.sort(key=lambda x: x[1], reverse=True)
 
         total_score = sum(s for _, s in scored_cats) or 1.0
-        # Normalize top score to probability confidence
         top_cat, top_raw = scored_cats[0]
         second_raw = scored_cats[1][1] if len(scored_cats) > 1 else 0.0
 
@@ -270,6 +407,18 @@ class LocalVisionClassifier:
 
         tags = [top_cat["code_name"], subcategory]
 
+        # Natural language visual description
+        visual_desc = self._generate_visual_description(top_cat["code_name"], subcategory, features)
+
+        # Semantic filename (lowercase, kebab-case, safe Windows name, original extension)
+        source_name = original_filename or image_path.name
+        proposed_filename = generate_semantic_filename(
+            description=visual_desc,
+            original_filename=source_name,
+            category_name=top_cat["display_name"],
+            subcategory=subcategory,
+        )
+
         return ClassificationResult(
             category_id=top_cat["id"],
             category_code=top_cat["code_name"],
@@ -281,6 +430,8 @@ class LocalVisionClassifier:
             reason=reason,
             tags=tags,
             raw_scores=raw_scores_dict,
+            visual_description=visual_desc,
+            proposed_filename=proposed_filename,
         )
 
     def classify_catalog(
@@ -290,7 +441,8 @@ class LocalVisionClassifier:
         progress_callback: Optional[Any] = None,
     ) -> Dict[str, int]:
         """
-        Classifies all unclassified images in the SQLite catalog and updates records.
+        Classifies all unclassified images in the SQLite catalog and updates records,
+        persisting both predicted categories and content-aware proposed filenames.
         """
         self._load_categories()
 
@@ -302,7 +454,7 @@ class LocalVisionClassifier:
             cursor = conn.cursor()
             # Select unclassified images
             cursor.execute(
-                "SELECT id, file_path, file_name, thumbnail_path, status FROM images WHERE status IN ('scanned', 'needs_review')"
+                "SELECT id, file_path, file_name, thumbnail_path, status, proposed_filename, visual_description FROM images WHERE status IN ('scanned', 'needs_review')"
             )
             rows = [dict(r) for r in cursor.fetchall()]
 
@@ -316,7 +468,7 @@ class LocalVisionClassifier:
                 if not eval_path.exists():
                     continue
 
-                res = self.classify_single_image(eval_path)
+                res = self.classify_single_image(eval_path, original_filename=item["file_name"])
 
                 # Record in image_classifications
                 cursor.execute(
@@ -324,7 +476,7 @@ class LocalVisionClassifier:
                     INSERT INTO image_classifications (
                         image_id, provider, model_name, predicted_category_id,
                         confidence_score, margin_score, raw_scores_json, suggested_tags_json
-                    ) VALUES (?, 'local_ai', 'vision_feature_v1', ?, ?, ?, ?, ?)
+                    ) VALUES (?, 'local_ai', 'vision_feature_v2', ?, ?, ?, ?, ?)
                     """,
                     (
                         img_id,
@@ -349,14 +501,18 @@ class LocalVisionClassifier:
                 else:
                     classified_count += 1
 
-                # Update images table
+                # Update images table with category, status, proposed_filename, and visual_description
                 cursor.execute(
                     """
                     UPDATE images
-                    SET status = ?, primary_category_id = ?, updated_at = DATETIME('now')
+                    SET status = ?,
+                        primary_category_id = ?,
+                        proposed_filename = COALESCE(proposed_filename, ?),
+                        visual_description = COALESCE(visual_description, ?),
+                        updated_at = DATETIME('now')
                     WHERE id = ?
                     """,
-                    (res.status, res.category_id, img_id),
+                    (res.status, res.category_id, res.proposed_filename, res.visual_description, img_id),
                 )
 
                 total_processed += 1

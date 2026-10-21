@@ -892,3 +892,30 @@ body {
   justify-content: flex-end;
   gap: 0.75rem;
 }
+
+
+/* Content-Aware Renaming & Description Styles */
+.review-input {
+  flex: 1;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  color: var(--text-main);
+  padding: 0.4rem 0.6rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.85rem;
+  outline: none;
+  font-family: monospace;
+}
+
+.review-input:focus {
+  border-color: var(--accent-primary);
+}
+
+.card-orig-filename {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-top: -0.2rem;
+}
