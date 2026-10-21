@@ -4,7 +4,7 @@ API dependencies and database connection lifecycle management.
 
 import sqlite3
 from pathlib import Path
-from typing import Generator
+from typing import Generator, Optional
 from fastapi import HTTPException, status
 
 from config.settings import settings
@@ -66,3 +66,57 @@ def get_read_only_db() -> Generator[sqlite3.Connection, None, None]:
         yield conn
     finally:
         conn.close()
+
+
+def validate_thumbnail_path(
+    raw_path: Optional[str],
+    allowed_dir: Optional[Path] = None,
+) -> Optional[Path]:
+    """
+    Validates that raw_path resolves to an existing file strictly located
+    inside the allowed thumbnail directory.
+
+    Guards against:
+    - Null / empty paths
+    - Path traversal attacks (e.g. ../..)
+    - Paths pointing outside the allowed thumbnails directory
+    - Symlink escapes pointing outside the thumbnails directory
+    - Non-existent files or directories
+
+    Returns:
+        The canonical, resolved Path if valid and safe, or None if invalid.
+    """
+    if not raw_path or not isinstance(raw_path, str) or not raw_path.strip():
+        return None
+
+    path_obj = Path(raw_path.strip())
+    target_dir = allowed_dir or settings.thumbnails_dir
+
+    if path_obj.is_absolute():
+        candidate = path_obj
+    else:
+        candidate_project = settings.project_root / path_obj
+        if candidate_project.exists():
+            candidate = candidate_project
+        else:
+            candidate = target_dir / path_obj
+
+    try:
+        resolved_file = candidate.resolve()
+        resolved_allowed_dir = target_dir.resolve()
+
+        # Defend against target being the directory itself
+        if resolved_file == resolved_allowed_dir:
+            return None
+
+        # Defend against traversal and symlink escapes
+        if not resolved_file.is_relative_to(resolved_allowed_dir):
+            return None
+
+        # Must be an existing regular file
+        if not resolved_file.is_file():
+            return None
+
+        return resolved_file
+    except (ValueError, OSError, RuntimeError):
+        return None
