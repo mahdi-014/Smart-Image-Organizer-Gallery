@@ -3,7 +3,8 @@ FastAPI application definition and core route registration.
 """
 
 import sqlite3
-from typing import Dict
+from enum import Enum
+from typing import Dict, Optional
 from fastapi import FastAPI, Depends, Query, Path as FastPath, HTTPException, status
 from fastapi.responses import FileResponse
 
@@ -11,6 +12,17 @@ from config.settings import settings
 from backend.api.deps import get_read_only_db, validate_thumbnail_path
 from backend.api.schemas import ImageItemResponse, ImageListResponse
 from backend.db.repository import list_images, count_images, get_image_by_id
+
+
+# Supported image processing status values — must match schema definition exactly.
+# Schema comment: 'scanned', 'classified', 'needs_review', 'approved', 'organized'
+class ImageStatus(str, Enum):
+    scanned = "scanned"
+    classified = "classified"
+    needs_review = "needs_review"
+    approved = "approved"
+    organized = "organized"
+
 
 app = FastAPI(
     title=settings.app_name,
@@ -32,13 +44,28 @@ def health_check() -> Dict[str, str]:
 def get_images(
     limit: int = Query(default=50, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
+    category_id: Optional[int] = Query(default=None, ge=1, description="Filter by primary category ID."),
+    status: Optional[ImageStatus] = Query(default=None, description="Filter by processing status."),
+    q: Optional[str] = Query(default=None, max_length=200, description="Search images by filename."),
     db: sqlite3.Connection = Depends(get_read_only_db),
 ) -> ImageListResponse:
     """
-    Return a paginated list of cataloged images with total matching count.
+    Return a paginated, optionally filtered list of cataloged images.
+
+    Optional filters:
+    - category_id: integer, returns images belonging to the specified category.
+    - status: one of scanned | classified | needs_review | approved | organized.
+    - q: text search on filename; leading/trailing whitespace is stripped.
+
+    total reflects the count of records matching the active filters, not the
+    total catalog size.
     """
-    total = count_images(db)
-    rows = list_images(db, limit=limit, offset=offset)
+    # Normalize the search string: blank/whitespace-only becomes None (no filter).
+    search_query: Optional[str] = q.strip() if q and q.strip() else None
+    status_value: Optional[str] = status.value if status else None
+
+    total = count_images(db, category_id=category_id, status=status_value, search_query=search_query)
+    rows = list_images(db, limit=limit, offset=offset, category_id=category_id, status=status_value, search_query=search_query)
 
     items = [
         ImageItemResponse(
@@ -90,21 +117,21 @@ def get_image_thumbnail(
     image = get_image_by_id(db, image_id)
     if not image:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
+            status_code=404,
             detail="Image not found.",
         )
 
     raw_thumbnail_path = image.get("thumbnail_path")
     if not raw_thumbnail_path:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
+            status_code=404,
             detail="Thumbnail not available.",
         )
 
     validated_path = validate_thumbnail_path(raw_thumbnail_path, settings.thumbnails_dir)
     if not validated_path:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
+            status_code=404,
             detail="Thumbnail not available.",
         )
 

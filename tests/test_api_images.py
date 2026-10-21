@@ -1,5 +1,6 @@
 """
 Tests for the read-only paginated image list API endpoint (GET /api/images).
+Covers baseline behavior, filter parameters, pagination, security, and error handling.
 """
 
 import sqlite3
@@ -67,6 +68,51 @@ def set_read_only_db_override(db_path: Path) -> None:
 
     app.dependency_overrides[get_read_only_db] = _override
 
+
+def _make_filter_db(tmp_path: Path) -> tuple:
+    """
+    Create a test database seeded with a known set of images across two
+    categories and two distinct statuses.  Returns (db_path, cat_a_id, cat_b_id).
+    """
+    db_path = tmp_path / "filter_test.db"
+    init_db(db_path)
+    with db_session(db_path) as conn:
+        c = conn.cursor()
+        c.execute("SELECT id FROM categories ORDER BY id LIMIT 2")
+        rows = c.fetchall()
+        cat_a_id = rows[0]["id"]
+        cat_b_id = rows[1]["id"] if len(rows) > 1 else None
+
+        images = [
+            # name,              status,         cat
+            ("vacation_beach.jpg", "scanned",    cat_a_id),
+            ("vacation_mountains.jpg", "approved", cat_a_id),
+            ("pet_dog.jpg",      "scanned",       cat_b_id),
+            ("pet_cat.jpg",      "classified",    cat_b_id),
+            ("invoice_2025.jpg", "approved",      None),
+            ("random_stuff.jpg", "scanned",       None),
+        ]
+        for idx, (name, st, cat) in enumerate(images, start=1):
+            upsert_image(conn, {
+                "file_path": f"C:\\photos\\{name}",
+                "file_name": name,
+                "file_size": 50000 + idx * 100,
+                "file_hash_sha256": f"filterdb_hash_{idx:04d}" + "a" * 44,
+                "phash": f"fphash_{idx}",
+                "width": 1280, "height": 720,
+                "file_format": "JPEG",
+                "date_taken": f"2025-03-{idx:02d}T09:00:00",
+                "date_modified": f"2025-03-{idx:02d}T10:00:00",
+                "thumbnail_path": None,
+                "status": st,
+                "primary_category_id": cat,
+            })
+    return db_path, cat_a_id, cat_b_id
+
+
+# ---------------------------------------------------------------------------
+# Baseline (existing) behavior tests
+# ---------------------------------------------------------------------------
 
 def test_images_populated_catalog_structure(tmp_path: Path, client: TestClient):
     """Verify populated catalog returns 200 OK and expected response fields."""
@@ -236,3 +282,200 @@ def test_health_endpoint_remains_operational(tmp_path: Path, client: TestClient)
         "status": "ok",
         "service": "Smart Image Organizer & Gallery",
     }
+
+
+# ---------------------------------------------------------------------------
+# Filter parameter tests (T2.4)
+# ---------------------------------------------------------------------------
+
+def test_filter_no_filters_preserves_existing_behavior(tmp_path: Path, client: TestClient):
+    """No filters: all images returned, totals unaffected."""
+    db_path, cat_a_id, _ = _make_filter_db(tmp_path)
+    set_read_only_db_override(db_path)
+
+    resp = client.get("/api/images")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["total"] == 6
+    assert len(data["items"]) == 6
+
+
+def test_filter_category_id_returns_matching_images(tmp_path: Path, client: TestClient):
+    """category_id filter returns only images in that category."""
+    db_path, cat_a_id, cat_b_id = _make_filter_db(tmp_path)
+    set_read_only_db_override(db_path)
+
+    resp = client.get(f"/api/images?category_id={cat_a_id}")
+    assert resp.status_code == 200
+    data = resp.json()
+    # cat_a has 2 images: vacation_beach + vacation_mountains
+    assert data["total"] == 2
+    assert len(data["items"]) == 2
+    names = {item["file_name"] for item in data["items"]}
+    assert "vacation_beach.jpg" in names
+    assert "vacation_mountains.jpg" in names
+
+    if cat_b_id:
+        resp_b = client.get(f"/api/images?category_id={cat_b_id}")
+        assert resp_b.status_code == 200
+        assert resp_b.json()["total"] == 2
+
+
+def test_filter_status_returns_matching_images(tmp_path: Path, client: TestClient):
+    """status filter returns only images with that processing status."""
+    db_path, _, _ = _make_filter_db(tmp_path)
+    set_read_only_db_override(db_path)
+
+    resp_scanned = client.get("/api/images?status=scanned")
+    assert resp_scanned.status_code == 200
+    data_scanned = resp_scanned.json()
+    # scanned: vacation_beach, pet_dog, random_stuff -> 3
+    assert data_scanned["total"] == 3
+    for item in data_scanned["items"]:
+        assert item["status"] == "scanned"
+
+    resp_approved = client.get("/api/images?status=approved")
+    assert resp_approved.status_code == 200
+    data_approved = resp_approved.json()
+    # approved: vacation_mountains, invoice_2025 -> 2
+    assert data_approved["total"] == 2
+    for item in data_approved["items"]:
+        assert item["status"] == "approved"
+
+
+def test_filter_q_finds_by_filename(tmp_path: Path, client: TestClient):
+    """q parameter matches images whose filename contains the search term."""
+    db_path, _, _ = _make_filter_db(tmp_path)
+    set_read_only_db_override(db_path)
+
+    resp = client.get("/api/images?q=vacation")
+    assert resp.status_code == 200
+    data = resp.json()
+    # vacation_beach.jpg + vacation_mountains.jpg -> 2
+    assert data["total"] == 2
+    names = {item["file_name"] for item in data["items"]}
+    assert "vacation_beach.jpg" in names
+    assert "vacation_mountains.jpg" in names
+
+
+def test_filter_q_no_match_returns_empty(tmp_path: Path, client: TestClient):
+    """A search with no matches returns an empty list and total: 0."""
+    db_path, _, _ = _make_filter_db(tmp_path)
+    set_read_only_db_override(db_path)
+
+    resp = client.get("/api/images?q=xyznonexistent")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["total"] == 0
+    assert data["items"] == []
+
+
+def test_filter_combined_category_status_q(tmp_path: Path, client: TestClient):
+    """All three filters combined return only records matching all conditions."""
+    db_path, cat_a_id, _ = _make_filter_db(tmp_path)
+    set_read_only_db_override(db_path)
+
+    # cat_a + status=scanned + q=vacation -> only vacation_beach (scanned in cat_a)
+    resp = client.get(f"/api/images?category_id={cat_a_id}&status=scanned&q=vacation")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["total"] == 1
+    assert data["items"][0]["file_name"] == "vacation_beach.jpg"
+
+
+def test_filter_pagination_with_filters_applied(tmp_path: Path, client: TestClient):
+    """Pagination works correctly when filters are active."""
+    db_path, _, _ = _make_filter_db(tmp_path)
+    set_read_only_db_override(db_path)
+
+    # 3 scanned images total; page with limit=2
+    resp_p1 = client.get("/api/images?status=scanned&limit=2&offset=0")
+    assert resp_p1.status_code == 200
+    d1 = resp_p1.json()
+    assert d1["total"] == 3
+    assert len(d1["items"]) == 2
+
+    resp_p2 = client.get("/api/images?status=scanned&limit=2&offset=2")
+    assert resp_p2.status_code == 200
+    d2 = resp_p2.json()
+    assert d2["total"] == 3
+    assert len(d2["items"]) == 1
+
+    # No overlap between pages
+    ids_p1 = {item["id"] for item in d1["items"]}
+    ids_p2 = {item["id"] for item in d2["items"]}
+    assert ids_p1.isdisjoint(ids_p2)
+
+
+def test_filter_total_counts_all_matching_not_just_page(tmp_path: Path, client: TestClient):
+    """total reflects all matched records regardless of limit."""
+    db_path, _, _ = _make_filter_db(tmp_path)
+    set_read_only_db_override(db_path)
+
+    resp = client.get("/api/images?status=scanned&limit=1&offset=0")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data["items"]) == 1
+    assert data["total"] == 3  # total matching, not page size
+
+
+def test_filter_q_empty_string_treats_as_no_filter(tmp_path: Path, client: TestClient):
+    """An empty q string is treated as if no search filter was supplied."""
+    db_path, _, _ = _make_filter_db(tmp_path)
+    set_read_only_db_override(db_path)
+
+    resp_empty = client.get("/api/images?q=")
+    assert resp_empty.status_code == 200
+    assert resp_empty.json()["total"] == 6
+
+    resp_whitespace = client.get("/api/images?q=   ")
+    assert resp_whitespace.status_code == 200
+    assert resp_whitespace.json()["total"] == 6
+
+
+def test_filter_q_whitespace_trimmed(tmp_path: Path, client: TestClient):
+    """Leading and trailing whitespace in q is trimmed before searching."""
+    db_path, _, _ = _make_filter_db(tmp_path)
+    set_read_only_db_override(db_path)
+
+    resp_padded = client.get("/api/images?q=  vacation  ")
+    assert resp_padded.status_code == 200
+    data = resp_padded.json()
+    # Should match the same 2 vacation images as unpadded search
+    assert data["total"] == 2
+
+
+def test_filter_invalid_category_id_returns_422(client: TestClient):
+    """category_id of 0 or negative is rejected with HTTP 422."""
+    assert client.get("/api/images?category_id=0").status_code == 422
+    assert client.get("/api/images?category_id=-1").status_code == 422
+    assert client.get("/api/images?category_id=abc").status_code == 422
+
+
+def test_filter_invalid_status_returns_422(client: TestClient):
+    """An unrecognized status value is rejected with HTTP 422."""
+    assert client.get("/api/images?status=invalid_status").status_code == 422
+    assert client.get("/api/images?status=SCANNED").status_code == 422
+    assert client.get("/api/images?status=deleted").status_code == 422
+
+
+def test_filter_q_exceeding_max_length_returns_422(client: TestClient):
+    """A q value longer than 200 characters is rejected with HTTP 422."""
+    long_q = "x" * 201
+    assert client.get(f"/api/images?q={long_q}").status_code == 422
+
+
+def test_filter_security_paths_not_exposed_with_filters(tmp_path: Path, client: TestClient):
+    """Filtered responses must not expose internal paths or hashes."""
+    db_path, _, _ = _make_filter_db(tmp_path)
+    set_read_only_db_override(db_path)
+
+    resp = client.get("/api/images?q=vacation")
+    assert resp.status_code == 200
+    text = resp.text
+
+    assert "file_path" not in text
+    assert "file_hash_sha256" not in text
+    assert "thumbnail_path" not in text
+    assert "filterdb_hash" not in text
+    assert "C:\\photos" not in text
