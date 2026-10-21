@@ -79,10 +79,10 @@ Categorized Output Folders (Byte-for-Byte Copies of Originals)
 | **M1** | Catalog Core | Scanner, Hasher, Metadata/EXIF, WebP Thumbnails, SQLite, Exact Duplicates | **Complete** |
 | **M1.5**| Hardening | Schema Versioning, Composite Indices, 1-Query Duplicates, Cache Headers, Unicode | **Complete** |
 | **M2** | Web Gallery UI | Responsive Grid, Detail Modal, Category/Status Filters, Debounced Search, API Serving | **Complete** |
-| **M3** | Local AI Vision | Zero-Shot Text-vs-Image Classification using `categories.yaml` anchor prompts | **In Progress** |
+| **M3** | Local AI Vision | Zero-Shot Text-vs-Image Classification using `categories.yaml` anchor prompts | **Complete** |
 | **M4** | Cloud AI Fallback | Optional Gemini API classification (thumbnails only, explicit user consent) | Planned |
 | **M5** | Perceptual Duplicates | pHash/dHash similarity clustering and "best shot in group" suggestions | Planned |
-| **M6** | Safe Organizer | Dry-run engine, collision renaming, `shutil.copy2`, SHA-256 validation, audit logging | Planned |
+| **M6** | Safe File Organizer | Dry-run engine, collision renaming, `shutil.copy2`, SHA-256 validation, Explorer integration | **Complete** |
 
 ---
 
@@ -157,8 +157,12 @@ Open your browser to:
 │   │   ├── deps.py            # Read-only database session & path validators
 │   │   └── schemas.py         # Pydantic response models
 │   ├── core/
+│   │   ├── classifier.py      # Local zero-shot vision classifier & subcategory engine
+│   │   ├── folder_service.py  # Path validator, browse dialog & Windows Explorer opener
 │   │   ├── hasher.py          # Streaming SHA-256 cryptographic hasher
 │   │   ├── metadata.py        # EXIF parser & WebP thumbnail generator
+│   │   ├── organizer.py       # Dry-run planner, collision resolver & copy verifier
+│   │   ├── scan_manager.py    # Background scan & classification task coordinator
 │   │   └── scanner.py         # Recursive read-only directory scanner
 │   └── db/
 │       ├── schema.py          # SQLite DDL tables, composite indices, migrations

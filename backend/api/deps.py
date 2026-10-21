@@ -8,6 +8,18 @@ from typing import Generator, Optional
 from fastapi import HTTPException, status
 
 from config.settings import settings
+from backend.db.session import db_session
+
+_db_path_override: Optional[Path] = None
+
+
+def set_db_path_override(db_path: Optional[Path]) -> None:
+    global _db_path_override
+    _db_path_override = db_path
+
+
+def get_db_path() -> Path:
+    return _db_path_override or settings.database_path
 
 
 def open_read_only_connection(db_path: Path) -> sqlite3.Connection:
@@ -61,11 +73,19 @@ def get_read_only_db() -> Generator[sqlite3.Connection, None, None]:
     FastAPI dependency yielding a read-only SQLite database connection
     for the application's configured database catalog.
     """
-    conn = open_read_only_connection(settings.database_path)
+    conn = open_read_only_connection(get_db_path())
     try:
         yield conn
     finally:
         conn.close()
+
+
+def get_write_db() -> Generator[sqlite3.Connection, None, None]:
+    """
+    FastAPI dependency yielding a writable SQLite transaction session.
+    """
+    with db_session(get_db_path()) as conn:
+        yield conn
 
 
 def validate_thumbnail_path(

@@ -253,3 +253,55 @@ def update_image_status(conn: sqlite3.Connection, file_path: str, status: str) -
         WHERE file_path = ?
     """, (status, file_path))
     return cursor.rowcount > 0
+
+
+def override_image_category(
+    conn: sqlite3.Connection,
+    image_id: int,
+    category_id: int,
+    approve: bool = True
+) -> bool:
+    """
+    Updates the primary category of an image, optionally marking it approved,
+    and marks any pending review queue items for this image as resolved.
+    """
+    cursor = conn.cursor()
+    new_status = "approved" if approve else "classified"
+    cursor.execute("""
+        UPDATE images
+        SET primary_category_id = ?, status = ?, updated_at = DATETIME('now')
+        WHERE id = ?
+    """, (category_id, new_status, image_id))
+    image_updated = cursor.rowcount > 0
+
+    # Resolve review queue entries
+    cursor.execute("""
+        UPDATE review_queue
+        SET is_resolved = 1, resolved_category_id = ?, resolved_at = DATETIME('now')
+        WHERE image_id = ? AND is_resolved = 0
+    """, (category_id, image_id))
+
+    return image_updated
+
+
+def get_needs_review_images(
+    conn: sqlite3.Connection,
+    limit: int = 50,
+    offset: int = 0
+) -> List[Dict[str, Any]]:
+    """Returns list of images currently requiring manual user review."""
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT
+            i.*,
+            c.display_name AS category_name,
+            c.code_name AS category_code,
+            rq.reason AS review_reason
+        FROM images i
+        LEFT JOIN categories c ON i.primary_category_id = c.id
+        LEFT JOIN review_queue rq ON i.id = rq.image_id AND rq.is_resolved = 0
+        WHERE i.status = 'needs_review'
+        ORDER BY i.id DESC
+        LIMIT ? OFFSET ?
+    """, (limit, offset))
+    return [dict(row) for row in cursor.fetchall()]

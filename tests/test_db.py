@@ -139,3 +139,49 @@ def test_find_exact_duplicates_single_query_execution(temp_db: Path):
         for d in dups:
             assert d["duplicate_count"] == 2
             assert len(d["images"]) == 2
+
+
+def test_override_image_category_resolves_review_queue(temp_db: Path):
+    """
+    Verifies that override_image_category updates primary_category_id,
+    marks status as approved, and resolves any associated review_queue items.
+    """
+    from backend.db.session import db_session
+
+    with db_session(temp_db) as conn:
+        img_id = repository.upsert_image(conn, {
+            "file_path": "C:/photos/dog.jpg",
+            "file_name": "dog.jpg",
+            "file_size": 2048,
+            "file_hash_sha256": "hash_dog",
+            "phash": "dummy",
+            "width": 100,
+            "height": 100,
+            "file_format": "JPEG",
+            "date_taken": None,
+            "date_modified": "2024-01-01T00:00:00",
+            "thumbnail_path": None,
+            "status": "needs_review",
+            "primary_category_id": None
+        })
+
+        # Add to review queue
+        cursor = conn.cursor()
+        cursor.execute("INSERT INTO review_queue (image_id, reason) VALUES (?, 'low_confidence')", (img_id,))
+
+        # Find categories
+        cats = repository.get_categories(conn)
+        target_cat_id = cats[0]["id"]
+
+        # Override category
+        repository.override_image_category(conn, image_id=img_id, category_id=target_cat_id, approve=True)
+
+        updated_img = repository.get_image_by_id(conn, img_id)
+        assert updated_img["primary_category_id"] == target_cat_id
+        assert updated_img["status"] == "approved"
+
+        # Verify review queue is marked resolved
+        cursor.execute("SELECT is_resolved, resolved_category_id FROM review_queue WHERE image_id = ?", (img_id,))
+        rq = cursor.fetchone()
+        assert rq["is_resolved"] == 1
+        assert rq["resolved_category_id"] == target_cat_id

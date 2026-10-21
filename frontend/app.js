@@ -18,19 +18,51 @@
     categories: [],
     selectedModalIndex: -1,
     isLoading: false,
+    // Organizer Workflow State
+    sourcePath: '',
+    destPath: '',
+    currentPlan: null,
+    isScanning: false,
+    isClassifying: false,
+    isOrganizing: false,
   };
 
   // DOM Elements
   const elements = {
+    // Header
     connectionStatus: document.getElementById('connectionStatus'),
     connectionText: document.getElementById('connectionText'),
     totalImagesCount: document.getElementById('totalImagesCount'),
+
+    // Workflow Elements
+    sourceFolderInput: document.getElementById('sourceFolderInput'),
+    destFolderInput: document.getElementById('destFolderInput'),
+    browseSourceBtn: document.getElementById('browseSourceBtn'),
+    browseDestBtn: document.getElementById('browseDestBtn'),
+    sourceValidationMsg: document.getElementById('sourceValidationMsg'),
+    destValidationMsg: document.getElementById('destValidationMsg'),
+
+    startScanBtn: document.getElementById('startScanBtn'),
+    startClassifyBtn: document.getElementById('startClassifyBtn'),
+    previewPlanBtn: document.getElementById('previewPlanBtn'),
+    executeOrganizeBtn: document.getElementById('executeOrganizeBtn'),
+    openExplorerBtn: document.getElementById('openExplorerBtn'),
+
+    workflowProgressCard: document.getElementById('workflowProgressCard'),
+    progressTitle: document.getElementById('progressTitle'),
+    progressPercentage: document.getElementById('progressPercentage'),
+    progressBarFill: document.getElementById('progressBarFill'),
+    progressDetail: document.getElementById('progressDetail'),
+
+    // Toolbar & Filters
     searchInput: document.getElementById('searchInput'),
     clearSearchBtn: document.getElementById('clearSearchBtn'),
     categoryFilter: document.getElementById('categoryFilter'),
     statusFilter: document.getElementById('statusFilter'),
     pageSizeSelect: document.getElementById('pageSizeSelect'),
     refreshBtn: document.getElementById('refreshBtn'),
+
+    // Gallery View
     galleryGrid: document.getElementById('galleryGrid'),
     loadingState: document.getElementById('loadingState'),
     errorState: document.getElementById('errorState'),
@@ -38,13 +70,26 @@
     emptyState: document.getElementById('emptyState'),
     retryBtn: document.getElementById('retryBtn'),
     resetFiltersBtn: document.getElementById('resetFiltersBtn'),
+
+    // Pagination
     paginationSummary: document.getElementById('paginationSummary'),
     firstPageBtn: document.getElementById('firstPageBtn'),
     prevPageBtn: document.getElementById('prevPageBtn'),
     nextPageBtn: document.getElementById('nextPageBtn'),
     lastPageBtn: document.getElementById('lastPageBtn'),
     pageIndicator: document.getElementById('pageIndicator'),
-    // Modal elements
+
+    // Dry-Run Preview Modal
+    previewModal: document.getElementById('previewModal'),
+    closePreviewModalBtn: document.getElementById('closePreviewModalBtn'),
+    cancelPreviewBtn: document.getElementById('cancelPreviewBtn'),
+    confirmOrganizeBtn: document.getElementById('confirmOrganizeBtn'),
+    planFilesCount: document.getElementById('planFilesCount'),
+    planTotalBytes: document.getElementById('planTotalBytes'),
+    planCollisionsCount: document.getElementById('planCollisionsCount'),
+    previewTableBody: document.getElementById('previewTableBody'),
+
+    // Detail & Review Modal
     detailModal: document.getElementById('detailModal'),
     closeModalBtn: document.getElementById('closeModalBtn'),
     modalPreviewImg: document.getElementById('modalPreviewImg'),
@@ -52,6 +97,8 @@
     modalCategoryBadge: document.getElementById('modalCategoryBadge'),
     modalStatusBadge: document.getElementById('modalStatusBadge'),
     modalFormatBadge: document.getElementById('modalFormatBadge'),
+    modalCategorySelect: document.getElementById('modalCategorySelect'),
+    modalApproveBtn: document.getElementById('modalApproveBtn'),
     modalDetailId: document.getElementById('modalDetailId'),
     modalDetailDims: document.getElementById('modalDetailDims'),
     modalDetailSize: document.getElementById('modalDetailSize'),
@@ -62,7 +109,7 @@
     modalPosition: document.getElementById('modalPosition'),
   };
 
-  // Helper: Escape HTML to prevent XSS
+  // Helper: Escape HTML
   function escapeHtml(str) {
     if (!str) return '';
     return String(str)
@@ -101,12 +148,12 @@
     }
   }
 
-  // Check Backend Health
+  // --- Backend Communication ---
+
   async function checkHealth() {
     try {
       const res = await fetch('/api/health');
       if (!res.ok) throw new Error('Health check failed');
-      const data = await res.json();
       elements.connectionStatus.className = 'status-pill status-ok';
       elements.connectionText.textContent = 'Connected';
     } catch (err) {
@@ -115,23 +162,323 @@
     }
   }
 
-  // Load Active Categories
   async function loadCategories() {
     try {
       const res = await fetch('/api/categories');
       if (!res.ok) throw new Error('Failed to load categories');
       state.categories = await res.json();
 
-      // Populate category dropdown
+      // Populate filter dropdown
       elements.categoryFilter.innerHTML = '<option value="">All Categories</option>';
+      elements.modalCategorySelect.innerHTML = '';
+
       state.categories.forEach((cat) => {
         const opt = document.createElement('option');
         opt.value = cat.id;
         opt.textContent = cat.display_name;
         elements.categoryFilter.appendChild(opt);
+
+        const modalOpt = document.createElement('option');
+        modalOpt.value = cat.id;
+        modalOpt.textContent = cat.display_name;
+        elements.modalCategorySelect.appendChild(modalOpt);
       });
     } catch (err) {
       console.error('Error fetching categories:', err);
+    }
+  }
+
+  // Folder Validation
+  async function validateFolder(path, mustExist = true) {
+    if (!path.trim()) return { valid: false, error: 'Path is required' };
+    try {
+      const res = await fetch('/api/folders/validate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ folder_path: path.trim(), must_exist: mustExist }),
+      });
+      return await res.json();
+    } catch (err) {
+      return { valid: false, error: err.message };
+    }
+  }
+
+  async function handleSourceFolderChange() {
+    const val = elements.sourceFolderInput.value.trim();
+    state.sourcePath = val;
+    if (!val) {
+      elements.sourceValidationMsg.textContent = '';
+      return;
+    }
+    const res = await validateFolder(val, true);
+    if (res.valid) {
+      elements.sourceValidationMsg.className = 'validation-msg valid';
+      elements.sourceValidationMsg.textContent = `✓ Valid folder: ${res.resolved_path}`;
+      elements.startScanBtn.disabled = false;
+    } else {
+      elements.sourceValidationMsg.className = 'validation-msg invalid';
+      elements.sourceValidationMsg.textContent = `✗ ${res.error || 'Invalid folder'}`;
+    }
+  }
+
+  async function handleDestFolderChange() {
+    const val = elements.destFolderInput.value.trim();
+    state.destPath = val;
+    if (!val) {
+      elements.destValidationMsg.textContent = '';
+      elements.openExplorerBtn.disabled = true;
+      return;
+    }
+    const res = await validateFolder(val, false);
+    if (res.valid) {
+      elements.destValidationMsg.className = 'validation-msg valid';
+      elements.destValidationMsg.textContent = `✓ Destination ready: ${res.resolved_path}`;
+      elements.previewPlanBtn.disabled = false;
+      elements.openExplorerBtn.disabled = false;
+    } else {
+      elements.destValidationMsg.className = 'validation-msg invalid';
+      elements.destValidationMsg.textContent = `✗ ${res.error || 'Invalid path'}`;
+    }
+  }
+
+  // Native Browse Calls
+  async function browseFolder(isSource) {
+    try {
+      const res = await fetch('/api/folders/browse', { method: 'POST' });
+      const data = await res.json();
+      if (data.folder_path) {
+        if (isSource) {
+          elements.sourceFolderInput.value = data.folder_path;
+          handleSourceFolderChange();
+        } else {
+          elements.destFolderInput.value = data.folder_path;
+          handleDestFolderChange();
+        }
+      }
+    } catch (err) {
+      console.error('Browse error:', err);
+    }
+  }
+
+  // Scanning Pipeline
+  async function startScan() {
+    const src = elements.sourceFolderInput.value.trim();
+    if (!src) {
+      alert('Please select a valid Source Folder first.');
+      return;
+    }
+
+    state.isScanning = true;
+    elements.startScanBtn.disabled = true;
+    elements.workflowProgressCard.style.display = 'flex';
+    elements.progressTitle.textContent = 'Scanning Source Directory...';
+    elements.progressBarFill.style.width = '10%';
+    elements.progressPercentage.textContent = 'Scanning...';
+    elements.progressDetail.textContent = `Starting traversal in ${src}`;
+
+    try {
+      const dest = elements.destFolderInput.value.trim();
+      const res = await fetch('/api/scan/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ source_path: src, exclude_path: dest || null }),
+      });
+      if (!res.ok) throw new Error('Failed to initiate scan.');
+
+      // Poll status
+      const pollInterval = setInterval(async () => {
+        try {
+          const statusRes = await fetch('/api/scan/status');
+          const status = await statusRes.json();
+
+          if (status.total_found > 0) {
+            const pct = Math.round((status.processed_count / status.total_found) * 100);
+            elements.progressBarFill.style.width = `${Math.max(5, pct)}%`;
+            elements.progressPercentage.textContent = `${pct}%`;
+          }
+
+          elements.progressDetail.textContent = `Processed ${status.processed_count} of ${status.total_found} images (${status.skipped_count} skipped, ${status.error_count} errors)`;
+
+          if (status.is_complete || !status.is_running) {
+            clearInterval(pollInterval);
+            state.isScanning = false;
+            elements.startScanBtn.disabled = false;
+            elements.startClassifyBtn.disabled = false;
+            elements.progressBarFill.style.width = '100%';
+            elements.progressPercentage.textContent = '100%';
+            elements.progressTitle.textContent = 'Scan Completed!';
+            await loadImages();
+          }
+        } catch (pollErr) {
+          clearInterval(pollInterval);
+          state.isScanning = false;
+          elements.startScanBtn.disabled = false;
+        }
+      }, 400);
+    } catch (err) {
+      alert(`Error starting scan: ${err.message}`);
+      state.isScanning = false;
+      elements.startScanBtn.disabled = false;
+    }
+  }
+
+  // Classification Pipeline
+  async function startClassification() {
+    state.isClassifying = true;
+    elements.startClassifyBtn.disabled = true;
+    elements.workflowProgressCard.style.display = 'flex';
+    elements.progressTitle.textContent = 'Running Local AI Classification...';
+    elements.progressBarFill.style.width = '30%';
+    elements.progressPercentage.textContent = 'Analyzing...';
+    elements.progressDetail.textContent = 'Evaluating visual features and matching categories...';
+
+    try {
+      const res = await fetch('/api/classify/start', { method: 'POST' });
+      if (!res.ok) throw new Error('Classification failed.');
+      const data = await res.json();
+
+      elements.progressBarFill.style.width = '100%';
+      elements.progressPercentage.textContent = '100%';
+      elements.progressTitle.textContent = 'Classification Complete!';
+      elements.progressDetail.textContent = `Classified: ${data.classified_count} images | Needs Review: ${data.needs_review_count} images`;
+      elements.previewPlanBtn.disabled = false;
+
+      await loadImages();
+    } catch (err) {
+      alert(`Classification error: ${err.message}`);
+    } finally {
+      state.isClassifying = false;
+      elements.startClassifyBtn.disabled = false;
+    }
+  }
+
+  // Dry-Run Preview
+  async function generatePreviewPlan() {
+    const dest = elements.destFolderInput.value.trim();
+    if (!dest) {
+      alert('Please enter or browse a Destination Folder first.');
+      return;
+    }
+
+    try {
+      const res = await fetch('/api/organize/preview', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ destination_dir: dest, include_needs_review: true }),
+      });
+      if (!res.ok) throw new Error('Failed to generate preview.');
+      state.currentPlan = await res.json();
+
+      elements.planFilesCount.textContent = state.currentPlan.total_files;
+      elements.planTotalBytes.textContent = formatBytes(state.currentPlan.total_bytes);
+
+      const collisions = state.currentPlan.items.filter((i) => i.collision_detected).length;
+      elements.planCollisionsCount.textContent = collisions;
+
+      elements.previewTableBody.innerHTML = '';
+      state.currentPlan.items.forEach((item) => {
+        const tr = document.createElement('tr');
+        const catLabel = item.subcategory ? `${item.category_name} / ${item.subcategory}` : item.category_name;
+        tr.innerHTML = `
+          <td title="${escapeHtml(item.source_path)}">${escapeHtml(item.destination_filename)}</td>
+          <td><span class="badge badge-category">${escapeHtml(catLabel)}</span></td>
+          <td style="font-family: monospace; font-size: 0.75rem;" title="${escapeHtml(item.destination_path)}">${escapeHtml(item.destination_path)}</td>
+          <td>${item.collision_detected ? '<span class="badge badge-status-needs_review">Collision Renamed</span>' : '<span class="badge badge-status">Ready</span>'}</td>
+        `;
+        elements.previewTableBody.appendChild(tr);
+      });
+
+      elements.previewModal.style.display = 'flex';
+      elements.executeOrganizeBtn.disabled = false;
+    } catch (err) {
+      alert(`Preview error: ${err.message}`);
+    }
+  }
+
+  // Execute Organize
+  async function executeOrganize() {
+    if (!state.currentPlan) return;
+    elements.previewModal.style.display = 'none';
+
+    state.isOrganizing = true;
+    elements.executeOrganizeBtn.disabled = true;
+    elements.workflowProgressCard.style.display = 'flex';
+    elements.progressTitle.textContent = 'Copying & Verifying Files (shutil.copy2)...';
+    elements.progressBarFill.style.width = '50%';
+    elements.progressPercentage.textContent = 'Copying...';
+    elements.progressDetail.textContent = 'Preserving originals, writing to destination, and verifying SHA-256...';
+
+    try {
+      const res = await fetch('/api/organize/execute', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          destination_dir: state.currentPlan.destination_root,
+          include_needs_review: true,
+        }),
+      });
+      if (!res.ok) throw new Error('Execution failed.');
+      const result = await res.json();
+
+      elements.progressBarFill.style.width = '100%';
+      elements.progressPercentage.textContent = '100%';
+      elements.progressTitle.textContent = 'Organization Successfully Completed!';
+      elements.progressDetail.textContent = `✓ Copied: ${result.copied_count} files | Verified SHA-256: ${result.verified_count} | Failed: ${result.failed_count}`;
+
+      elements.openExplorerBtn.disabled = false;
+      await loadImages();
+    } catch (err) {
+      alert(`Organization execution error: ${err.message}`);
+    } finally {
+      state.isOrganizing = false;
+      elements.executeOrganizeBtn.disabled = false;
+    }
+  }
+
+  // Open in Windows File Explorer
+  async function openInFileExplorer() {
+    const dest = elements.destFolderInput.value.trim();
+    if (!dest) {
+      alert('Please specify a Destination Folder.');
+      return;
+    }
+    try {
+      const res = await fetch('/api/folders/open', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ folder_path: dest }),
+      });
+      const data = await res.json();
+      if (!data.success) {
+        alert('Could not open folder in File Explorer.');
+      }
+    } catch (err) {
+      alert(`Explorer error: ${err.message}`);
+    }
+  }
+
+  // Approve / Change Category in Modal
+  async function approveCurrentModalImage() {
+    const item = state.items[state.selectedModalIndex];
+    if (!item) return;
+
+    const chosenCatId = parseInt(elements.modalCategorySelect.value, 10);
+    try {
+      const res = await fetch(`/api/images/${item.id}/category`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ category_id: chosenCatId, approve: true }),
+      });
+      if (!res.ok) throw new Error('Failed to update category');
+
+      item.status = 'approved';
+      const catObj = state.categories.find((c) => c.id === chosenCatId);
+      if (catObj) item.category_name = catObj.display_name;
+
+      updateModalContent();
+      renderGallery();
+    } catch (err) {
+      alert(`Error approving category: ${err.message}`);
     }
   }
 
@@ -158,27 +505,21 @@
 
     try {
       const res = await fetch(`/api/images?${params.toString()}`);
-      if (!res.ok) {
-        throw new Error(`Server returned HTTP ${res.status}`);
-      }
+      if (!res.ok) throw new Error(`Server returned HTTP ${res.status}`);
       const data = await res.json();
       state.items = data.items || [];
       state.total = data.total || 0;
 
-      // Update total catalog badge
       elements.totalImagesCount.textContent = state.total.toLocaleString();
-
       renderGallery();
       renderPagination();
     } catch (err) {
-      console.error('Failed to load images:', err);
       showError(err.message || 'Error communicating with catalog server.');
     } finally {
       state.isLoading = false;
     }
   }
 
-  // View States
   function showLoading() {
     elements.loadingState.style.display = 'flex';
     elements.errorState.style.display = 'none';
@@ -296,6 +637,12 @@
     elements.modalStatusBadge.textContent = item.status;
     elements.modalFormatBadge.textContent = item.file_format || 'N/A';
 
+    // Set matching select option if available
+    if (item.category_name) {
+      const match = state.categories.find((c) => c.display_name === item.category_name);
+      if (match) elements.modalCategorySelect.value = match.id;
+    }
+
     elements.modalDetailId.textContent = `#${item.id}`;
     elements.modalDetailDims.textContent = item.width && item.height ? `${item.width} × ${item.height} px` : 'Unknown';
     elements.modalDetailSize.textContent = `${formatBytes(item.file_size)} (${item.file_size.toLocaleString()} bytes)`;
@@ -323,6 +670,31 @@
 
   // Event Listeners Setup
   function setupEventListeners() {
+    // Folder inputs & browse
+    elements.sourceFolderInput.addEventListener('change', handleSourceFolderChange);
+    elements.destFolderInput.addEventListener('change', handleDestFolderChange);
+    elements.browseSourceBtn.addEventListener('click', () => browseFolder(true));
+    elements.browseDestBtn.addEventListener('click', () => browseFolder(false));
+
+    // Pipeline actions
+    elements.startScanBtn.addEventListener('click', startScan);
+    elements.startClassifyBtn.addEventListener('click', startClassification);
+    elements.previewPlanBtn.addEventListener('click', generatePreviewPlan);
+    elements.executeOrganizeBtn.addEventListener('click', executeOrganize);
+    elements.confirmOrganizeBtn.addEventListener('click', executeOrganize);
+    elements.openExplorerBtn.addEventListener('click', openInFileExplorer);
+
+    // Preview Modal events
+    elements.closePreviewModalBtn.addEventListener('click', () => {
+      elements.previewModal.style.display = 'none';
+    });
+    elements.cancelPreviewBtn.addEventListener('click', () => {
+      elements.previewModal.style.display = 'none';
+    });
+
+    // Review Modal Approve
+    elements.modalApproveBtn.addEventListener('click', approveCurrentModalImage);
+
     // Search with debounce
     let searchTimeout = null;
     elements.searchInput.addEventListener('input', (e) => {
@@ -344,28 +716,25 @@
       loadImages();
     });
 
-    // Category filter
+    // Filters
     elements.categoryFilter.addEventListener('change', (e) => {
       state.categoryId = e.target.value || null;
       state.page = 1;
       loadImages();
     });
 
-    // Status filter
     elements.statusFilter.addEventListener('change', (e) => {
       state.status = e.target.value || null;
       state.page = 1;
       loadImages();
     });
 
-    // Page size change
     elements.pageSizeSelect.addEventListener('change', (e) => {
       state.limit = parseInt(e.target.value, 10) || 24;
       state.page = 1;
       loadImages();
     });
 
-    // Refresh & Retry buttons
     elements.refreshBtn.addEventListener('click', () => loadImages());
     elements.retryBtn.addEventListener('click', () => {
       checkHealth();
@@ -373,7 +742,6 @@
       loadImages();
     });
 
-    // Reset filters from empty state
     elements.resetFiltersBtn.addEventListener('click', () => {
       state.categoryId = null;
       state.status = null;
@@ -410,7 +778,7 @@
       loadImages();
     });
 
-    // Modal events
+    // Modal controls
     elements.closeModalBtn.addEventListener('click', closeModal);
     elements.detailModal.addEventListener('click', (e) => {
       if (e.target === elements.detailModal) closeModal();
@@ -425,6 +793,9 @@
         if (e.key === 'ArrowLeft') showPrevModalItem();
         if (e.key === 'ArrowRight') showNextModalItem();
       }
+      if (elements.previewModal.style.display === 'flex') {
+        if (e.key === 'Escape') elements.previewModal.style.display = 'none';
+      }
     });
   }
 
@@ -436,11 +807,9 @@
     await loadImages();
   }
 
-  // Run on DOM ready
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', init);
   } else {
     init();
   }
 })();
-

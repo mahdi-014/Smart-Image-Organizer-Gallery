@@ -14,7 +14,7 @@
         <div>
           <h1 class="app-title">Smart Image Organizer & Gallery</h1>
           <p class="app-subtitle">
-            Local-First Privacy-Guaranteed Image Curation
+            Local-First Privacy-Guaranteed Image Curation & Organization
           </p>
         </div>
       </div>
@@ -29,6 +29,78 @@
         </div>
       </div>
     </header>
+
+    <!-- Workflow Command Center -->
+    <section class="workflow-section">
+      <div class="workflow-card">
+        <div class="workflow-steps-header">
+          <h2 class="workflow-heading">🚀 Organizer Workflow</h2>
+          <span class="workflow-badge">Local Windows Processing</span>
+        </div>
+
+        <!-- Folder Selection Row -->
+        <div class="folder-inputs-grid">
+          <div class="folder-input-group">
+            <label for="sourceFolderInput">Source Folder (Original Unorganized Photos):</label>
+            <div class="input-with-button">
+              <input
+                type="text"
+                id="sourceFolderInput"
+                placeholder="e.g. C:\Users\Mahdi\Pictures\Unsorted"
+                autocomplete="off"
+              />
+              <button id="browseSourceBtn" class="btn btn-secondary" title="Browse Local Folder">Browse...</button>
+            </div>
+            <div id="sourceValidationMsg" class="validation-msg"></div>
+          </div>
+
+          <div class="folder-input-group">
+            <label for="destFolderInput">Destination Folder (Organized Library):</label>
+            <div class="input-with-button">
+              <input
+                type="text"
+                id="destFolderInput"
+                placeholder="e.g. D:\Organized_Photos"
+                autocomplete="off"
+              />
+              <button id="browseDestBtn" class="btn btn-secondary" title="Browse Local Folder">Browse...</button>
+            </div>
+            <div id="destValidationMsg" class="validation-msg"></div>
+          </div>
+        </div>
+
+        <!-- Workflow Action Pipeline -->
+        <div class="workflow-pipeline">
+          <button id="startScanBtn" class="btn btn-primary" title="Scan source folder for images">
+            🔍 1. Scan Folder
+          </button>
+          <button id="startClassifyBtn" class="btn btn-action" title="Run local zero-shot AI classification">
+            🤖 2. Classify Images (Local AI)
+          </button>
+          <button id="previewPlanBtn" class="btn btn-action" title="Preview folder structure and check collisions">
+            📋 3. Preview Dry-Run
+          </button>
+          <button id="executeOrganizeBtn" class="btn btn-success" disabled title="Approve and copy files byte-for-byte">
+            ✅ 4. Approve & Organize
+          </button>
+          <button id="openExplorerBtn" class="btn btn-secondary" title="Open destination in Windows File Explorer">
+            📂 Open in File Explorer
+          </button>
+        </div>
+
+        <!-- Real-time Progress Bar -->
+        <div id="workflowProgressCard" class="progress-card" style="display: none;">
+          <div class="progress-header">
+            <span id="progressTitle" class="progress-title">Working...</span>
+            <span id="progressPercentage" class="progress-percentage">0%</span>
+          </div>
+          <div class="progress-bar-bg">
+            <div id="progressBarFill" class="progress-bar-fill" style="width: 0%;"></div>
+          </div>
+          <div id="progressDetail" class="progress-detail">Initializing task...</div>
+        </div>
+      </div>
+    </section>
 
     <!-- Control & Filter Toolbar -->
     <section class="toolbar-section">
@@ -67,7 +139,7 @@
             <option value="">All Statuses</option>
             <option value="scanned">Scanned</option>
             <option value="classified">Classified</option>
-            <option value="needs_review">Needs Review</option>
+            <option value="needs_review">Needs Review ⚠️</option>
             <option value="approved">Approved</option>
             <option value="organized">Organized</option>
           </select>
@@ -85,11 +157,7 @@
         </div>
 
         <!-- Refresh Button -->
-        <button
-          id="refreshBtn"
-          class="btn btn-secondary"
-          title="Refresh Gallery"
-        >
+        <button id="refreshBtn" class="btn btn-secondary" title="Refresh Gallery">
           🔄 Refresh
         </button>
       </div>
@@ -104,11 +172,7 @@
       </div>
 
       <!-- Error State -->
-      <div
-        id="errorState"
-        class="state-container error-state"
-        style="display: none"
-      >
+      <div id="errorState" class="state-container error-state" style="display: none">
         <div class="state-icon">⚠️</div>
         <h3 class="state-title">Unable to Load Images</h3>
         <p id="errorMessage" class="state-message">
@@ -118,19 +182,13 @@
       </div>
 
       <!-- Empty State -->
-      <div
-        id="emptyState"
-        class="state-container empty-state"
-        style="display: none"
-      >
+      <div id="emptyState" class="state-container empty-state" style="display: none">
         <div class="state-icon">📂</div>
-        <h3 class="state-title">No Images Found</h3>
+        <h3 class="state-title">No Images in Catalog</h3>
         <p class="state-message">
-          No cataloged photos match your current filters or search query.
+          Enter a local folder path above and click <strong>Scan Folder</strong> to start organizing your images.
         </p>
-        <button id="resetFiltersBtn" class="btn btn-secondary">
-          Clear Filters
-        </button>
+        <button id="resetFiltersBtn" class="btn btn-secondary">Clear Filters</button>
       </div>
 
       <!-- Gallery Grid -->
@@ -143,9 +201,7 @@
         Showing 0 of 0 images
       </div>
       <div class="pagination-controls">
-        <button id="firstPageBtn" class="btn btn-page" disabled>
-          ⏮ First
-        </button>
+        <button id="firstPageBtn" class="btn btn-page" disabled>⏮ First</button>
         <button id="prevPageBtn" class="btn btn-page" disabled>◀ Prev</button>
         <span id="pageIndicator" class="page-indicator">Page 1 of 1</span>
         <button id="nextPageBtn" class="btn btn-page" disabled>Next ▶</button>
@@ -153,41 +209,72 @@
       </div>
     </footer>
 
-    <!-- Image Detail Modal -->
+    <!-- Dry-Run Preview Modal -->
+    <div id="previewModal" class="modal-backdrop" style="display: none;">
+      <div class="modal-card modal-large" role="dialog" aria-modal="true" aria-labelledby="previewModalTitle">
+        <button id="closePreviewModalBtn" class="modal-close-btn" title="Close (Esc)">✕</button>
+        <div class="preview-modal-header">
+          <h2 id="previewModalTitle" class="modal-heading">📋 Organization Dry-Run Preview</h2>
+          <p class="preview-modal-sub">
+            Review the proposed category folder structure. <strong>Original source files will remain untouched.</strong>
+          </p>
+        </div>
+
+        <div class="preview-stats-bar">
+          <div class="preview-stat"><span>Files to Copy:</span> <strong id="planFilesCount">0</strong></div>
+          <div class="preview-stat"><span>Total Size:</span> <strong id="planTotalBytes">0 MB</strong></div>
+          <div class="preview-stat"><span>Collisions Resolved:</span> <strong id="planCollisionsCount">0</strong></div>
+        </div>
+
+        <div class="preview-table-container">
+          <table class="preview-table">
+            <thead>
+              <tr>
+                <th>Source File</th>
+                <th>Category / Subcategory</th>
+                <th>Proposed Destination Path</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody id="previewTableBody"></tbody>
+          </table>
+        </div>
+
+        <div class="preview-modal-footer">
+          <button id="cancelPreviewBtn" class="btn btn-secondary">Cancel</button>
+          <button id="confirmOrganizeBtn" class="btn btn-success">✅ Confirm & Execute Copy</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Image Detail & Review Modal -->
     <div id="detailModal" class="modal-backdrop" style="display: none">
-      <div
-        class="modal-card"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="modalFileName"
-      >
-        <button id="closeModalBtn" class="modal-close-btn" title="Close (Esc)">
-          ✕
-        </button>
+      <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="modalFileName">
+        <button id="closeModalBtn" class="modal-close-btn" title="Close (Esc)">✕</button>
 
         <div class="modal-body">
           <!-- Preview Section -->
           <div class="modal-preview-wrapper">
-            <img
-              id="modalPreviewImg"
-              class="modal-preview-img"
-              src=""
-              alt="Thumbnail preview"
-            />
+            <img id="modalPreviewImg" class="modal-preview-img" src="" alt="Thumbnail preview" />
           </div>
 
-          <!-- Metadata Section -->
+          <!-- Metadata & Review Section -->
           <div class="modal-details-panel">
             <h2 id="modalFileName" class="modal-filename">photo.jpg</h2>
 
             <div class="modal-badge-row">
-              <span id="modalCategoryBadge" class="badge badge-category"
-                >Uncategorized</span
-              >
-              <span id="modalStatusBadge" class="badge badge-status"
-                >Scanned</span
-              >
+              <span id="modalCategoryBadge" class="badge badge-category">Uncategorized</span>
+              <span id="modalStatusBadge" class="badge badge-status">Scanned</span>
               <span id="modalFormatBadge" class="badge badge-format">JPEG</span>
+            </div>
+
+            <!-- Manual Category Review & Reassign -->
+            <div class="review-box">
+              <label for="modalCategorySelect"><strong>Change / Approve Category:</strong></label>
+              <div class="review-controls">
+                <select id="modalCategorySelect" class="review-select"></select>
+                <button id="modalApproveBtn" class="btn btn-primary">Approve</button>
+              </div>
             </div>
 
             <div class="details-table">
@@ -215,15 +302,9 @@
 
             <!-- Navigation buttons within modal -->
             <div class="modal-nav-row">
-              <button id="modalPrevBtn" class="btn btn-secondary">
-                ◀ Previous
-              </button>
-              <span id="modalPosition" class="modal-position-indicator"
-                >1 / 1</span
-              >
-              <button id="modalNextBtn" class="btn btn-secondary">
-                Next ▶
-              </button>
+              <button id="modalPrevBtn" class="btn btn-secondary">◀ Previous</button>
+              <span id="modalPosition" class="modal-position-indicator">1 / 1</span>
+              <button id="modalNextBtn" class="btn btn-secondary">Next ▶</button>
             </div>
           </div>
         </div>

@@ -636,3 +636,259 @@ body {
   font-weight: 600;
 }
 
+
+
+/* ==========================================================================
+   Workflow Section & Pipeline
+   ========================================================================== */
+
+.workflow-section {
+  background-color: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-color);
+  padding: 1.25rem 1.5rem;
+}
+
+.workflow-card {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.workflow-steps-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.workflow-heading {
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: var(--text-main);
+}
+
+.workflow-badge {
+  font-size: 0.75rem;
+  font-weight: 600;
+  background: var(--bg-input);
+  border: 1px solid var(--border-color);
+  padding: 0.2rem 0.6rem;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+}
+
+.folder-inputs-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 1.25rem;
+}
+
+.folder-input-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.folder-input-group label {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.input-with-button {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.input-with-button input {
+  flex: 1;
+  background: var(--bg-input);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  color: var(--text-main);
+  padding: 0.5rem 0.75rem;
+  font-size: 0.85rem;
+  outline: none;
+  transition: border-color 0.15s ease;
+}
+
+.input-with-button input:focus {
+  border-color: var(--border-focus);
+}
+
+.validation-msg {
+  font-size: 0.75rem;
+  min-height: 1.1rem;
+}
+
+.validation-msg.valid {
+  color: var(--accent-success);
+}
+
+.validation-msg.invalid {
+  color: var(--accent-danger);
+}
+
+.workflow-pipeline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+  padding-top: 0.5rem;
+  border-top: 1px dashed var(--border-color);
+}
+
+.btn-action {
+  background-color: #6366f1;
+  color: #ffffff;
+}
+
+.btn-action:hover:not(:disabled) {
+  background-color: #4f46e5;
+}
+
+.btn-success {
+  background-color: var(--accent-success);
+  color: #ffffff;
+}
+
+.btn-success:hover:not(:disabled) {
+  background-color: #059669;
+}
+
+/* Progress Card */
+.progress-card {
+  background: var(--bg-input);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: 0.85rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.progress-header {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.progress-bar-bg {
+  width: 100%;
+  height: 8px;
+  background: var(--border-color);
+  border-radius: 9999px;
+  overflow: hidden;
+}
+
+.progress-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent-primary), var(--accent-success));
+  border-radius: 9999px;
+  transition: width 0.3s ease;
+}
+
+.progress-detail {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+/* Review Box in Modal */
+.review-box {
+  background: var(--bg-input);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  padding: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.review-controls {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.review-select {
+  flex: 1;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  color: var(--text-main);
+  padding: 0.4rem 0.6rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.85rem;
+  outline: none;
+}
+
+/* Large Dry-Run Preview Modal */
+.modal-large {
+  max-width: 960px;
+}
+
+.preview-modal-header {
+  padding: 1.25rem 1.5rem 0.5rem 1.5rem;
+}
+
+.modal-heading {
+  font-size: 1.2rem;
+  font-weight: 700;
+}
+
+.preview-modal-sub {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  margin-top: 0.2rem;
+}
+
+.preview-stats-bar {
+  display: flex;
+  gap: 1.5rem;
+  padding: 0.75rem 1.5rem;
+  background: var(--bg-input);
+  border-top: 1px solid var(--border-color);
+  border-bottom: 1px solid var(--border-color);
+  font-size: 0.85rem;
+}
+
+.preview-stat span {
+  color: var(--text-muted);
+}
+
+.preview-stat strong {
+  color: var(--accent-primary);
+}
+
+.preview-table-container {
+  padding: 1rem 1.5rem;
+  max-height: 50vh;
+  overflow-y: auto;
+}
+
+.preview-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+  text-align: left;
+}
+
+.preview-table th,
+.preview-table td {
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.preview-table th {
+  color: var(--text-muted);
+  font-weight: 600;
+  position: sticky;
+  top: 0;
+  background: var(--bg-card);
+}
+
+.preview-modal-footer {
+  padding: 1rem 1.5rem;
+  border-top: 1px solid var(--border-color);
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.75rem;
+}

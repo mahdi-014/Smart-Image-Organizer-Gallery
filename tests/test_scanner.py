@@ -691,3 +691,31 @@ def test_scan_long_windows_paths(tmp_path: Path, temp_db: Path):
     with db_session(temp_db) as conn:
         images = repository.list_images(conn)
         assert any("deeply_nested_photo.jpg" in img["file_name"] for img in images)
+
+
+def test_scan_directory_skips_excluded_destination_folder(tmp_path: Path, temp_db: Path):
+    """
+    Verifies that when an exclude directory (such as the organized destination folder)
+    is located inside the source folder tree, it is pruned and not scanned.
+    """
+    from PIL import Image
+
+    src_dir = tmp_path / "photos"
+    src_dir.mkdir()
+    valid_img = src_dir / "keep_me.jpg"
+    Image.new("RGB", (50, 50), "red").save(valid_img)
+
+    # Excluded folder inside source
+    dest_dir = src_dir / "Organized"
+    dest_dir.mkdir()
+    excluded_img = dest_dir / "should_be_skipped.jpg"
+    Image.new("RGB", (50, 50), "blue").save(excluded_img)
+
+    progress = scan_directory(str(src_dir), db_path=temp_db, exclude_dirs=[str(dest_dir)])
+
+    assert progress.is_complete is True
+    assert progress.total_found == 1
+    with db_session(temp_db) as conn:
+        images = repository.list_images(conn)
+        assert len(images) == 1
+        assert images[0]["file_name"] == "keep_me.jpg"

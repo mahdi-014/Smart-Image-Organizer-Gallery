@@ -70,7 +70,8 @@ def scan_directory(
     progress_callback: Optional[Callable[[ScanProgress], None]] = None,
     db_path: Optional[Path] = None,
     extensions: Set[str] = SUPPORTED_EXTENSIONS,
-    batch_size: int = 200
+    batch_size: int = 200,
+    exclude_dirs: Optional[List[str]] = None
 ) -> ScanProgress:
     """
     Recursively scans an image folder, extracts metadata, generates thumbnails,
@@ -96,10 +97,15 @@ def scan_directory(
         if progress_callback:
             progress_callback(progress)
 
+    resolved_excludes = {Path(ex).resolve() for ex in (exclude_dirs or []) if ex}
     candidates: List[Path] = []
     for root, dirs, files in os.walk(str(root_path), topdown=True, onerror=on_walk_error, followlinks=False):
         # In-place directory pruning: os.walk only recurses into directories that remain in dirs
-        dirs[:] = [d for d in dirs if d.lower() not in IGNORED_DIR_NAMES]
+        dirs[:] = [
+            d for d in dirs
+            if d.lower() not in IGNORED_DIR_NAMES
+            and (Path(root) / d).resolve() not in resolved_excludes
+        ]
 
         for file_name in files:
             file_path = Path(root) / file_name

@@ -11,14 +11,48 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from config.settings import settings
-from backend.api.deps import get_read_only_db, validate_thumbnail_path
+from backend.api.deps import get_read_only_db, get_write_db, get_db_path, validate_thumbnail_path
 from backend.api.schemas import (
     CategoryResponse,
     HealthResponse,
     ImageItemResponse,
     ImageListResponse,
+    FolderValidateRequest,
+    FolderValidateResponse,
+    FolderBrowseResponse,
+    FolderOpenRequest,
+    FolderOpenResponse,
+    ScanStartRequest,
+    ScanStatusResponse,
+    ClassifyStartResponse,
+    ClassifyStatusResponse,
+    CategoryOverrideRequest,
+    CategoryOverrideResponse,
+    OrganizePreviewRequest,
+    OrganizeExecuteRequest,
 )
-from backend.db.repository import list_images, count_images, get_image_by_id, get_categories
+from backend.db.repository import (
+    list_images,
+    count_images,
+    get_image_by_id,
+    get_categories,
+    override_image_category,
+    get_needs_review_images,
+)
+from backend.core.folder_service import (
+    validate_local_folder,
+    browse_local_folder,
+    open_in_file_explorer,
+    check_folder_overlap,
+)
+from backend.core.scan_manager import coordinator
+from backend.core.classifier import LocalVisionClassifier
+from backend.core.organizer import (
+    generate_organization_plan,
+    execute_organization_plan,
+    OrganizationPlan,
+    OrganizationResult,
+)
 
 
 # Supported image processing status values — must match schema definition exactly.
@@ -170,6 +204,148 @@ def get_active_categories(
     """
     categories = get_categories(db)
     return [CategoryResponse.model_validate(cat) for cat in categories]
+
+
+# --- Organizer Workflow API Endpoints ---
+
+@app.post("/api/folders/validate", response_model=FolderValidateResponse)
+def validate_folder_route(payload: FolderValidateRequest) -> FolderValidateResponse:
+    """Validates a local filesystem folder path for source or destination usage."""
+    try:
+        resolved = validate_local_folder(payload.folder_path, must_exist=payload.must_exist)
+        return FolderValidateResponse(
+            valid=True,
+            resolved_path=str(resolved),
+            exists=resolved.exists(),
+        )
+    except Exception as e:
+        return FolderValidateResponse(
+            valid=False,
+            resolved_path=None,
+            exists=False,
+            error=str(e),
+        )
+
+
+@app.post("/api/folders/browse", response_model=FolderBrowseResponse)
+def browse_folder_route() -> FolderBrowseResponse:
+    """Opens native Windows directory selection dialog on host machine."""
+    chosen = browse_local_folder()
+    return FolderBrowseResponse(folder_path=chosen)
+
+
+@app.post("/api/folders/open", response_model=FolderOpenResponse)
+def open_folder_route(payload: FolderOpenRequest) -> FolderOpenResponse:
+    """Opens target directory directly inside Windows File Explorer."""
+    success = open_in_file_explorer(payload.folder_path)
+    return FolderOpenResponse(
+        success=success,
+        message=f"Opened in File Explorer: {payload.folder_path}" if success else "Failed to open folder",
+    )
+
+
+@app.post("/api/scan/start", response_model=ScanStatusResponse)
+def start_scan_route(payload: ScanStartRequest) -> ScanStatusResponse:
+    """Initiates background directory scan of chosen source folder."""
+    try:
+        validated_src = validate_local_folder(payload.source_path, must_exist=True)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    validated_ex = None
+    if payload.exclude_path:
+        try:
+            validated_ex = str(validate_local_folder(payload.exclude_path, must_exist=False))
+        except Exception:
+            pass
+
+    started = coordinator.start_scan(str(validated_src), exclude_path=validated_ex, db_path=get_db_path())
+    status = coordinator.get_scan_status()
+    return ScanStatusResponse(**status)
+
+
+@app.get("/api/scan/status", response_model=ScanStatusResponse)
+def get_scan_status_route() -> ScanStatusResponse:
+    """Polls live status of running or completed catalog scan."""
+    return ScanStatusResponse(**coordinator.get_scan_status())
+
+
+@app.post("/api/classify/start", response_model=ClassifyStartResponse)
+def start_classification_route(db: sqlite3.Connection = Depends(get_read_only_db)) -> ClassifyStartResponse:
+    """Runs local AI classification across unclassified catalog images."""
+    classifier = LocalVisionClassifier()
+    # Note: Using active DB connection or path
+    summary = classifier.classify_catalog(db_path=get_db_path())
+    return ClassifyStartResponse(
+        status="completed",
+        total_processed=summary["total_processed"],
+        classified_count=summary["classified_count"],
+        needs_review_count=summary["needs_review_count"],
+    )
+
+
+@app.get("/api/classify/status", response_model=ClassifyStatusResponse)
+def get_classify_status_route() -> ClassifyStatusResponse:
+    """Polls live status of background classification worker."""
+    return ClassifyStatusResponse(**coordinator.get_classification_status())
+
+
+@app.patch("/api/images/{image_id}/category", response_model=CategoryOverrideResponse)
+def override_image_category_route(
+    image_id: int = FastPath(..., ge=1),
+    payload: CategoryOverrideRequest = ...,
+    db: sqlite3.Connection = Depends(get_write_db),
+) -> CategoryOverrideResponse:
+    """Manually reassigns category and approves an image, resolving review queue."""
+    success = override_image_category(db, image_id, payload.category_id, approve=payload.approve)
+    if not success:
+        raise HTTPException(status_code=404, detail="Image not found.")
+    return CategoryOverrideResponse(
+        success=True,
+        image_id=image_id,
+        status="approved" if payload.approve else "classified",
+    )
+
+
+@app.post("/api/organize/preview", response_model=OrganizationPlan)
+def organize_preview_route(
+    payload: OrganizePreviewRequest,
+    db: sqlite3.Connection = Depends(get_read_only_db),
+) -> OrganizationPlan:
+    """Generates dry-run folder organization manifest without modifying files."""
+    try:
+        resolved_dest = validate_local_folder(payload.destination_dir, must_exist=False)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    plan = generate_organization_plan(
+        destination_dir=str(resolved_dest),
+        db_path=get_db_path(),
+        image_ids=payload.image_ids,
+        include_needs_review=payload.include_needs_review,
+    )
+    return plan
+
+
+@app.post("/api/organize/execute", response_model=OrganizationResult)
+def organize_execute_route(
+    payload: OrganizeExecuteRequest,
+    db: sqlite3.Connection = Depends(get_read_only_db),
+) -> OrganizationResult:
+    """Executes approved organization plan: copies files, verifies SHA-256, and logs operations."""
+    try:
+        resolved_dest = validate_local_folder(payload.destination_dir, must_exist=False)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    plan = generate_organization_plan(
+        destination_dir=str(resolved_dest),
+        db_path=get_db_path(),
+        image_ids=payload.image_ids,
+        include_needs_review=payload.include_needs_review,
+    )
+    result = execute_organization_plan(plan, db_path=get_db_path())
+    return result
 
 
 # Static files mount for Web Gallery frontend
