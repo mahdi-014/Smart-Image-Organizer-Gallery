@@ -19,10 +19,6 @@ DATA_DIR = PROJECT_ROOT / "data"
 THUMBNAILS_DIR = DATA_DIR / "thumbnails"
 DATABASE_PATH = DATA_DIR / "gallery.db"
 
-# Ensure data directories exist
-DATA_DIR.mkdir(parents=True, exist_ok=True)
-THUMBNAILS_DIR.mkdir(parents=True, exist_ok=True)
-
 # Image Scanning Filters (case-insensitive)
 # Supports standard web formats and legacy/uncompressed formats
 SUPPORTED_EXTENSIONS: Set[str] = {
@@ -73,6 +69,14 @@ class Settings(BaseModel):
 
     # Categories
     categories: List[CategoryDefinition] = []
+
+    def ensure_directories(self) -> None:
+        """
+        Explicitly creates runtime storage directories (data_dir and thumbnails_dir).
+        Must be invoked intentionally by runtime runners, never during module import.
+        """
+        self.data_dir.mkdir(parents=True, exist_ok=True)
+        self.thumbnails_dir.mkdir(parents=True, exist_ok=True)
 
     @classmethod
     def load(cls) -> "Settings":

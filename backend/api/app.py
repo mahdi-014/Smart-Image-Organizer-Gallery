@@ -2,6 +2,7 @@
 FastAPI application definition and core route registration.
 """
 
+from contextlib import asynccontextmanager
 import sqlite3
 from enum import Enum
 from typing import Dict, Optional
@@ -24,8 +25,19 @@ class ImageStatus(str, Enum):
     organized = "organized"
 
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """
+    Explicit application lifecycle management.
+    Ensures runtime storage directories exist when the server starts.
+    """
+    settings.ensure_directories()
+    yield
+
+
 app = FastAPI(
     title=settings.app_name,
+    lifespan=lifespan,
 )
 
 

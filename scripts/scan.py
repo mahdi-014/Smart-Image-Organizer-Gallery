@@ -15,6 +15,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
+from config.settings import settings
 from backend.db.session import init_db, db_session
 from backend.db import repository
 from backend.core.scanner import scan_directory, ScanProgress
@@ -35,6 +36,9 @@ def main():
         print(f"[!] Error: Target directory does not exist: {target_dir}")
         print("Tip: Run 'python scripts/generate_test_data.py' first to create synthetic test images.")
         return
+
+    # Ensure data and thumbnail storage directories exist
+    settings.ensure_directories()
 
     # Ensure database tables and categories exist
     print("[*] Initializing SQLite database (WAL mode)...")
@@ -79,4 +83,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
