@@ -626,3 +626,68 @@ def test_scan_directory_rejects_decompression_bomb_with_clear_error(tmp_path: Pa
         assert repository.count_images(conn) == 1
         images = repository.list_images(conn)
         assert images[0]["file_name"] == "good_photo.jpg"
+
+
+def test_scan_unicode_bangla_and_emoji_filenames(tmp_path: Path, temp_db: Path):
+    """
+    Verifies that files with Unicode, Bangla, and Emoji characters are scanned,
+    metadata-extracted, hashed, thumbnailed, and indexed into SQLite without errors.
+    """
+    from PIL import Image
+
+    img_dir = tmp_path / "unicode_photos"
+    img_dir.mkdir()
+
+    # 1. Bangla filename
+    bangla_file = img_dir / "বাংলা_স্মৃতি_২০২৪.png"
+    Image.new("RGB", (60, 60), "red").save(bangla_file)
+
+    # 2. Emoji filename
+    emoji_file = img_dir / "vacation_🏖️_family_👨‍👩‍👧.jpg"
+    Image.new("RGB", (60, 60), "blue").save(emoji_file)
+
+    # 3. Accented / Latin-extended filename
+    accent_file = img_dir / "café_résumé_über.png"
+    Image.new("RGB", (60, 60), "green").save(accent_file)
+
+    progress = scan_directory(str(img_dir), db_path=temp_db)
+
+    assert progress.is_complete is True
+    assert progress.total_found == 3
+    assert progress.processed_count == 3
+    assert progress.error_count == 0
+
+    with db_session(temp_db) as conn:
+        assert repository.count_images(conn) == 3
+        images = repository.list_images(conn)
+        file_names = {img["file_name"] for img in images}
+        assert "বাংলা_স্মৃতি_২০২৪.png" in file_names
+        assert "vacation_🏖️_family_👨‍👩‍👧.jpg" in file_names
+        assert "café_résumé_über.png" in file_names
+
+
+def test_scan_long_windows_paths(tmp_path: Path, temp_db: Path):
+    """
+    Verifies that images situated inside deep directory hierarchies
+    exceeding 260 characters (Windows MAX_PATH) are successfully scanned and cataloged.
+    """
+    from PIL import Image
+
+    deep_dir = tmp_path
+    while len(str(deep_dir)) < 270:
+        deep_dir = deep_dir / "deep_nested_directory_level_to_exceed_max_path_length"
+    deep_dir.mkdir(parents=True, exist_ok=True)
+
+    long_img = deep_dir / "deeply_nested_photo.jpg"
+    Image.new("RGB", (50, 50), "yellow").save(long_img)
+
+    assert len(str(long_img)) > 260, f"Path length {len(str(long_img))} must exceed 260"
+
+    progress = scan_directory(str(tmp_path), db_path=temp_db)
+
+    assert progress.is_complete is True
+    assert progress.total_found >= 1
+    assert progress.error_count == 0
+    with db_session(temp_db) as conn:
+        images = repository.list_images(conn)
+        assert any("deeply_nested_photo.jpg" in img["file_name"] for img in images)

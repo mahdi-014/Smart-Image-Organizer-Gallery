@@ -5,6 +5,8 @@ Contains DDL statements for creating the tables, indices, and views
 required by the Smart Image Organizer & Gallery application.
 """
 
+CURRENT_SCHEMA_VERSION = 1
+
 SCHEMA_SQL = """
 -- 1. Categories Table (Configurable Taxonomy)
 CREATE TABLE IF NOT EXISTS categories (
@@ -42,6 +44,9 @@ CREATE INDEX IF NOT EXISTS idx_images_phash ON images(phash);
 CREATE INDEX IF NOT EXISTS idx_images_status ON images(status);
 CREATE INDEX IF NOT EXISTS idx_images_category ON images(primary_category_id);
 CREATE INDEX IF NOT EXISTS idx_images_date_taken ON images(date_taken);
+CREATE INDEX IF NOT EXISTS idx_images_gallery_order ON images(date_taken DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_images_cat_date ON images(primary_category_id, date_taken DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_images_status_date ON images(status, date_taken DESC, id DESC);
 
 -- 3. AI Classification History (Local & Cloud)
 CREATE TABLE IF NOT EXISTS image_classifications (

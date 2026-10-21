@@ -5,6 +5,7 @@ Provides CRUD operations and specialized queries for image cataloging,
 duplicate detection, category taxonomy, and operational logging.
 """
 
+import itertools
 import sqlite3
 from typing import Optional, List, Dict, Any
 
@@ -181,24 +182,29 @@ def find_exact_duplicates(conn: sqlite3.Connection) -> List[Dict[str, Any]]:
     """
     Finds groups of images having the exact same SHA-256 hash.
     Returns list of duplicate hash groups and member file paths.
+    Uses a single query with subquery filtering and itertools.groupby.
     """
     cursor = conn.cursor()
     cursor.execute("""
-        SELECT file_hash_sha256, COUNT(*) as count
+        SELECT *
         FROM images
-        GROUP BY file_hash_sha256
-        HAVING COUNT(*) > 1
+        WHERE file_hash_sha256 IN (
+            SELECT file_hash_sha256
+            FROM images
+            GROUP BY file_hash_sha256
+            HAVING COUNT(*) > 1
+        )
+        ORDER BY file_hash_sha256, id ASC
     """)
-    duplicate_hashes = [row["file_hash_sha256"] for row in cursor.fetchall()]
+    rows = [dict(row) for row in cursor.fetchall()]
 
     groups = []
-    for h in duplicate_hashes:
-        cursor.execute("SELECT * FROM images WHERE file_hash_sha256 = ? ORDER BY id ASC", (h,))
-        members = [dict(row) for row in cursor.fetchall()]
+    for h, items_iter in itertools.groupby(rows, key=lambda r: r["file_hash_sha256"]):
+        members = list(items_iter)
         groups.append({
             "file_hash_sha256": h,
             "duplicate_count": len(members),
-            "images": members
+            "images": members,
         })
 
     return groups

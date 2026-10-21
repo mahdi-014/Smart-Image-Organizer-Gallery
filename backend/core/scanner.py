@@ -29,6 +29,7 @@ Concepts Explained for Beginners:
 """
 
 import os
+import logging
 from pathlib import Path
 from datetime import datetime
 from typing import Optional, Callable, Dict, Any, List, Set
@@ -39,6 +40,8 @@ from backend.core.hasher import compute_sha256
 from backend.core.metadata import extract_metadata, generate_thumbnail
 from backend.db.session import db_session
 from backend.db import repository
+
+logger = logging.getLogger("backend.core.scanner")
 
 
 class ScanProgress(BaseModel):

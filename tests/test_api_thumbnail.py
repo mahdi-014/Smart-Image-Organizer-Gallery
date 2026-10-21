@@ -289,3 +289,26 @@ def test_validate_thumbnail_path_unit_behavior(tmp_path: Path):
     assert validate_thumbnail_path(str(valid_file), allowed) == valid_file.resolve()
     assert validate_thumbnail_path(str(allowed), allowed) is None  # Directory itself
     assert validate_thumbnail_path(str(tmp_path / "missing.webp"), allowed) is None
+
+
+def test_thumbnail_response_has_immutable_cache_control_header(
+    tmp_path: Path, client: TestClient, monkeypatch: pytest.MonkeyPatch
+):
+    """Verify that content-addressed thumbnails return Cache-Control: public, max-age=31536000, immutable."""
+    test_thumbs_dir = tmp_path / "thumbnails"
+    test_thumbs_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(settings, "thumbnails_dir", test_thumbs_dir)
+
+    thumb_file = test_thumbs_dir / "immutable_test.webp"
+    thumb_file.write_bytes(b"RIFF\x20\x00\x00\x00WEBPVP8 \x14\x00\x00\x00\xb0\x01\x00\x00")
+
+    db_path = tmp_path / "test_thumb.db"
+    init_db(db_path)
+    with db_session(db_path) as conn:
+        img_id = create_synthetic_image(conn, "sample.jpg", str(thumb_file))
+
+    set_read_only_db_override(db_path)
+
+    response = client.get(f"/api/images/{img_id}/thumbnail")
+    assert response.status_code == 200
+    assert response.headers.get("cache-control") == "public, max-age=31536000, immutable"

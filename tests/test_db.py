@@ -74,3 +74,68 @@ def test_sqlite_desc_null_ordering(temp_db: Path):
         assert rows[1]["id"] == 1       # '2024-01-01' (older)
         assert rows[2]["id"] == 2       # NULL (sorted last)
         assert rows[2]["dt"] is None
+
+
+def test_sqlite_schema_versioning(temp_db: Path):
+    """Verifies that SQLite user_version is recorded and matches CURRENT_SCHEMA_VERSION."""
+    from backend.db.session import get_schema_version, get_connection
+    from backend.db.schema import CURRENT_SCHEMA_VERSION
+
+    conn = get_connection(temp_db)
+    try:
+        assert get_schema_version(conn) == CURRENT_SCHEMA_VERSION
+    finally:
+        conn.close()
+
+
+def test_sqlite_composite_indices_exist(temp_db: Path):
+    """Verifies that composite gallery-ordering and filtering indices exist in SQLite master."""
+    from backend.db.session import get_connection
+
+    conn = get_connection(temp_db)
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='index';")
+        indices = {row[0] for row in cursor.fetchall()}
+
+        assert "idx_images_gallery_order" in indices
+        assert "idx_images_cat_date" in indices
+        assert "idx_images_status_date" in indices
+    finally:
+        conn.close()
+
+
+def test_find_exact_duplicates_single_query_execution(temp_db: Path):
+    """
+    Verifies that find_exact_duplicates accurately identifies duplicate groups
+    and groups all identical SHA-256 items together.
+    """
+    from backend.db.session import db_session
+
+    with db_session(temp_db) as conn:
+        for i in range(1, 5):
+            h = "hash_group_a" if i <= 2 else "hash_group_b"
+            data = {
+                "file_path": f"C:/photos/dup_{i}.jpg",
+                "file_name": f"dup_{i}.jpg",
+                "file_size": 2048,
+                "file_hash_sha256": h,
+                "phash": "dummy",
+                "width": 100,
+                "height": 100,
+                "file_format": "JPEG",
+                "date_taken": f"2024-01-0{i}T00:00:00",
+                "date_modified": f"2024-01-0{i}T00:00:00",
+                "thumbnail_path": None,
+                "status": "scanned",
+                "primary_category_id": None
+            }
+            repository.upsert_image(conn, data)
+
+        dups = repository.find_exact_duplicates(conn)
+        assert len(dups) == 2
+        hashes = {d["file_hash_sha256"] for d in dups}
+        assert hashes == {"hash_group_a", "hash_group_b"}
+        for d in dups:
+            assert d["duplicate_count"] == 2
+            assert len(d["images"]) == 2

@@ -11,7 +11,7 @@ from typing import Optional
 from contextlib import contextmanager
 
 from config.settings import settings
-from backend.db.schema import SCHEMA_SQL
+from backend.db.schema import CURRENT_SCHEMA_VERSION, SCHEMA_SQL
 
 
 def get_connection(db_path: Optional[Path] = None) -> sqlite3.Connection:
@@ -58,6 +58,33 @@ def db_session(db_path: Optional[Path] = None):
         conn.close()
 
 
+def get_schema_version(conn: sqlite3.Connection) -> int:
+    """
+    Returns the integer schema version recorded in SQLite PRAGMA user_version.
+    """
+    cursor = conn.cursor()
+    cursor.execute("PRAGMA user_version;")
+    row = cursor.fetchone()
+    return int(row[0]) if row and row[0] is not None else 0
+
+
+def set_schema_version(conn: sqlite3.Connection, version: int) -> None:
+    """
+    Sets the integer schema version recorded in SQLite PRAGMA user_version.
+    """
+    conn.execute(f"PRAGMA user_version = {int(version)};")
+
+
+def migrate_db(conn: sqlite3.Connection) -> None:
+    """
+    Applies incremental database schema migrations up to CURRENT_SCHEMA_VERSION.
+    """
+    current_version = get_schema_version(conn)
+    if current_version < 1:
+        conn.executescript(SCHEMA_SQL)
+        set_schema_version(conn, CURRENT_SCHEMA_VERSION)
+
+
 def init_db(db_path: Optional[Path] = None) -> None:
     """
     Initializes the database schema and seeds initial categories
@@ -67,7 +94,7 @@ def init_db(db_path: Optional[Path] = None) -> None:
     current_settings = Settings.load()
 
     with db_session(db_path) as conn:
-        conn.executescript(SCHEMA_SQL)
+        migrate_db(conn)
 
         # Seed and synchronize categories
         cursor = conn.cursor()

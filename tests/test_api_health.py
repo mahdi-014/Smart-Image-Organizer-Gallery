@@ -25,3 +25,10 @@ def test_health_check_status_code_and_payload():
         "status": "ok",
         "service": settings.app_name,
     }
+
+
+def test_health_check_uses_typed_pydantic_response_model():
+    """Verify that GET /api/health route is configured with typed HealthResponse model."""
+    from backend.api.schemas import HealthResponse
+    route = next(r for r in app.routes if getattr(r, "path", None) == "/api/health")
+    assert getattr(route, "response_model", None) is HealthResponse

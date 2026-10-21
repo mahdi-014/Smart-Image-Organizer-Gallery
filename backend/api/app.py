@@ -11,7 +11,11 @@ from fastapi.responses import FileResponse
 
 from config.settings import settings
 from backend.api.deps import get_read_only_db, validate_thumbnail_path
-from backend.api.schemas import ImageItemResponse, ImageListResponse
+from backend.api.schemas import (
+    HealthResponse,
+    ImageItemResponse,
+    ImageListResponse,
+)
 from backend.db.repository import list_images, count_images, get_image_by_id
 
 
@@ -41,8 +45,8 @@ app = FastAPI(
 )
 
 
-@app.get("/api/health")
-def health_check() -> Dict[str, str]:
+@app.get("/api/health", response_model=HealthResponse)
+def health_check() -> HealthResponse:
     """
     Return basic service health status and application metadata.
     """
@@ -152,4 +156,5 @@ def get_image_thumbnail(
         media_type="image/webp",
         filename=validated_path.name,
         content_disposition_type="inline",
+        headers={"Cache-Control": "public, max-age=31536000, immutable"},
     )

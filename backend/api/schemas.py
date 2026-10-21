@@ -6,6 +6,14 @@ from typing import List, Optional
 from pydantic import BaseModel, ConfigDict
 
 
+class HealthResponse(BaseModel):
+    """
+    Service health check response payload.
+    """
+    status: str
+    service: str
+
+
 class ImageItemResponse(BaseModel):
     """
     Public metadata representation of a single cataloged image.
