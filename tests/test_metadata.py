@@ -119,4 +119,99 @@ def test_extract_metadata_exif_resilience(tmp_path: Path):
     assert meta["date_taken"] is not None
 
 
+def test_generate_thumbnail_palette_png_preserves_transparency(tmp_path: Path):
+    """
+    Verifies that palette-mode (P) PNG images with transparency metadata
+    retain their alpha transparency in the generated WebP thumbnail,
+    preventing transparent areas from turning into opaque black boxes.
+    """
+    fpath = tmp_path / "palette_transparent.png"
+    # Create image with transparent background and opaque red foreground
+    img = Image.new("RGBA", (10, 10), (0, 0, 0, 0))
+    for x in range(3, 7):
+        for y in range(3, 7):
+            img.putpixel((x, y), (255, 0, 0, 255))
+
+    # Convert to palette mode with adaptive palette preserving transparency
+    p_img = img.convert("P", palette=Image.Palette.ADAPTIVE)
+    p_img.save(fpath, format="PNG")
+
+    # Verify source file is indeed palette mode with transparency
+    with Image.open(fpath) as src:
+        assert src.mode == "P"
+        assert "transparency" in src.info
+
+    thumb_rel = generate_thumbnail(fpath, "hash_pal_png", output_dir=tmp_path)
+    assert thumb_rel is not None
+
+    thumb_file = tmp_path / "hash_pal_png.webp"
+    assert thumb_file.exists()
+
+    with Image.open(thumb_file) as thumb:
+        # Must be RGBA to preserve alpha channel
+        assert thumb.mode == "RGBA"
+        # Background pixel must remain transparent (alpha == 0)
+        bg_pixel = thumb.getpixel((0, 0))
+        assert bg_pixel[3] == 0, f"Expected transparent alpha 0, got pixel: {bg_pixel}"
+        # Foreground pixel must remain opaque (alpha == 255)
+        fg_pixel = thumb.getpixel((5, 5))
+        assert fg_pixel[3] == 255, f"Expected opaque alpha 255, got pixel: {fg_pixel}"
+
+
+def test_generate_thumbnail_transparent_gif_preserves_transparency(tmp_path: Path):
+    """
+    Verifies that transparent GIF images (palette mode with transparency index)
+    retain their alpha transparency in the generated WebP thumbnail.
+    """
+    fpath = tmp_path / "transparent_sample.gif"
+    img = Image.new("RGBA", (10, 10), (0, 0, 0, 0))
+    for x in range(3, 7):
+        for y in range(3, 7):
+            img.putpixel((x, y), (0, 128, 255, 255))
+
+    img.save(fpath, format="GIF", transparency=0)
+
+    # Verify source is palette GIF with transparency index
+    with Image.open(fpath) as src:
+        assert src.mode == "P"
+        assert "transparency" in src.info
+
+    thumb_rel = generate_thumbnail(fpath, "hash_trans_gif", output_dir=tmp_path)
+    assert thumb_rel is not None
+
+    thumb_file = tmp_path / "hash_trans_gif.webp"
+    assert thumb_file.exists()
+
+    with Image.open(thumb_file) as thumb:
+        assert thumb.mode == "RGBA"
+        bg_pixel = thumb.getpixel((0, 0))
+        assert bg_pixel[3] == 0, f"Expected transparent alpha 0, got pixel: {bg_pixel}"
+        fg_pixel = thumb.getpixel((5, 5))
+        assert fg_pixel[3] == 255, f"Expected opaque alpha 255, got pixel: {fg_pixel}"
+
+
+def test_generate_thumbnail_opaque_palette_uses_rgb(tmp_path: Path):
+    """
+    Verifies that opaque palette images (no transparency metadata) are converted
+    to RGB WebP thumbnails, avoiding unnecessary alpha channel storage.
+    """
+    fpath = tmp_path / "opaque_palette.png"
+    img = Image.new("RGB", (10, 10), (200, 100, 50))
+    p_img = img.convert("P")
+    p_img.save(fpath, format="PNG")
+
+    with Image.open(fpath) as src:
+        assert src.mode == "P"
+        assert "transparency" not in src.info
+
+    thumb_rel = generate_thumbnail(fpath, "hash_opaque_pal", output_dir=tmp_path)
+    assert thumb_rel is not None
+
+    thumb_file = tmp_path / "hash_opaque_pal.webp"
+    assert thumb_file.exists()
+
+    with Image.open(thumb_file) as thumb:
+        assert thumb.mode == "RGB"
+
+
 

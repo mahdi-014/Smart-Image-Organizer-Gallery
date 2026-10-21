@@ -162,8 +162,10 @@ def generate_thumbnail(
             transposed = ImageOps.exif_transpose(img)
 
             # Convert color mode for WebP compatibility
-            if transposed.mode in ("RGBA", "LA"):
+            if transposed.mode == "RGBA":
                 thumb_img = transposed.copy()
+            elif transposed.mode in ("LA", "PA") or "transparency" in transposed.info:
+                thumb_img = transposed.convert("RGBA")
             elif transposed.mode != "RGB":
                 thumb_img = transposed.convert("RGB")
             else:
