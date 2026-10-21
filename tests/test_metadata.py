@@ -297,3 +297,35 @@ def test_extract_metadata_at_or_below_ceiling_succeeds(tmp_path: Path, monkeypat
     assert meta["width"] == 50
     assert meta["height"] == 50
     assert meta["file_name"] == "normal_sized.png"
+
+
+def test_generate_thumbnail_passes_method_4_to_encoder(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """
+    Verifies that generate_thumbnail passes method=4 to PIL.Image.Image.save(),
+    ensuring balanced, high-performance WebP encoding without alpha CPU stalls.
+    """
+    from PIL.Image import Image as PILImage
+    import backend.core.metadata as meta_mod
+
+    # 1. Create and save the source test PNG BEFORE monkeypatching save
+    img_path = tmp_path / "test_img.png"
+    Image.new("RGB", (100, 100), "red").save(img_path)
+
+    # 2. Spy on PIL.Image.Image.save specifically for thumbnail generation
+    saved_kwargs = {}
+    original_save = PILImage.save
+
+    def spy_save(self, fp, *args, **kwargs):
+        saved_kwargs.update(kwargs)
+        return original_save(self, fp, *args, **kwargs)
+
+    monkeypatch.setattr(PILImage, "save", spy_save)
+
+    result = meta_mod.generate_thumbnail(img_path, "sample_hash_m4", output_dir=tmp_path)
+
+    assert result is not None
+    assert saved_kwargs.get("format") == "WEBP"
+    assert saved_kwargs.get("quality") == 85
+    assert saved_kwargs.get("method") == 4, (
+        f"Expected method=4, got method={saved_kwargs.get('method')}"
+    )

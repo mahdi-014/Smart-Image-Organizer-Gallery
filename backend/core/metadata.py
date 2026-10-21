@@ -208,7 +208,7 @@ def generate_thumbnail(
                     dest_file,
                     format=THUMBNAIL_FORMAT,
                     quality=THUMBNAIL_QUALITY,
-                    method=6  # Highest compression efficiency
+                    method=4  # Balanced compression and encoding speed
                 )
 
         return _format_path(dest_file)
