@@ -189,6 +189,20 @@ def scan_directory(
                     conn.commit()
                     uncommitted_count = 0
 
+            except FileNotFoundError as fnf_err:
+                # Confirm whether the source image itself has actually disappeared
+                if not file_path.exists():
+                    if canonical_path not in progress.missing_files:
+                        progress.missing_count += 1
+                        progress.missing_files.append(canonical_path)
+                    existing = repository.get_image_by_path(conn, canonical_path)
+                    if existing is not None and existing.get("status") != "needs_review":
+                        repository.update_image_status(conn, canonical_path, "needs_review")
+                        uncommitted_count += 1
+                else:
+                    # Source image exists; FileNotFoundError was caused by an internal asset / dependency
+                    progress.error_count += 1
+                    progress.errors.append(f"Failed to process {file_path.name}: {str(fnf_err)}")
             except Exception as e:
                 progress.error_count += 1
                 progress.errors.append(f"Failed to process {file_path.name}: {str(e)}")

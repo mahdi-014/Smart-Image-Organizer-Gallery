@@ -461,3 +461,123 @@ def test_scan_detects_and_reports_deleted_or_moved_files(tmp_path: Path, temp_db
         rec_f2 = repository.get_image_by_path(conn, str(f2.resolve()))
         assert rec_f2 is not None
         assert rec_f2["status"] == "needs_review"
+
+
+def test_scan_file_disappearing_between_passes_handled_as_transient(tmp_path: Path, temp_db: Path):
+    """
+    Verifies TOCTOU handling: when a file is collected in Pass 1, but vanishes
+    before or during Pass 2 processing (e.g. deleted by user or external tool):
+    1. The disappearance is caught and classified as a transient missing file.
+    2. missing_count is incremented exactly once and missing_files includes the path.
+    3. error_count is NOT incremented (not treated as a corrupt file).
+    4. An existing catalog record has its status updated to 'needs_review'.
+    5. Other accessible files continue processing without interruption.
+    """
+    from PIL import Image
+
+    img_dir = tmp_path / "photos"
+    img_dir.mkdir()
+    file_stay = img_dir / "photo_stay.jpg"
+    file_vanish = img_dir / "photo_vanish.jpg"
+
+    Image.new("RGB", (60, 60), "red").save(file_stay)
+    Image.new("RGB", (60, 60), "blue").save(file_vanish)
+
+    # Initial scan so photo_vanish is in the database with status 'scanned'
+    p1 = scan_directory(str(img_dir), db_path=temp_db)
+    assert p1.processed_count == 2
+    assert p1.error_count == 0
+    assert p1.missing_count == 0
+
+    with db_session(temp_db) as conn:
+        assert repository.count_images(conn) == 2
+        rec = repository.get_image_by_path(conn, str(file_vanish.resolve()))
+        assert rec["status"] == "scanned"
+
+    # Callback deletes file_vanish right after Pass 1 collection finishes
+    def on_progress(p):
+        if p.total_found == 2 and file_vanish.exists():
+            file_vanish.unlink()
+
+    # Re-scan: candidate collection finds both, then photo_vanish vanishes before candidate processing
+    p2 = scan_directory(str(img_dir), db_path=temp_db, progress_callback=on_progress)
+    assert p2.is_complete is True
+    assert p2.total_found == 2
+    assert p2.missing_count == 1
+    assert str(file_vanish.resolve()) in p2.missing_files
+    assert p2.error_count == 0
+    assert p2.skipped_count == 1  # photo_stay was unchanged and skipped
+
+    # In DB, verify photo_vanish was updated to needs_review
+    with db_session(temp_db) as conn:
+        rec_vanish = repository.get_image_by_path(conn, str(file_vanish.resolve()))
+        assert rec_vanish is not None
+        assert rec_vanish["status"] == "needs_review"
+
+
+def test_scan_new_file_disappearing_between_passes_handled_as_transient(tmp_path: Path, temp_db: Path):
+    """
+    Verifies that a brand-new file (never cataloged in the database) that disappears
+    between Pass 1 and Pass 2 is counted as missing_count=1 and error_count=0.
+    """
+    from PIL import Image
+
+    img_dir = tmp_path / "photos"
+    img_dir.mkdir()
+    file_stay = img_dir / "photo_stay.jpg"
+    file_new_vanish = img_dir / "photo_new_vanish.jpg"
+
+    Image.new("RGB", (60, 60), "red").save(file_stay)
+    Image.new("RGB", (60, 60), "blue").save(file_new_vanish)
+
+    # Callback deletes file_new_vanish right after Pass 1 collection
+    def on_progress(p):
+        if p.total_found == 2 and file_new_vanish.exists():
+            file_new_vanish.unlink()
+
+    # Initial scan of directory containing the new file that disappears
+    p = scan_directory(str(img_dir), db_path=temp_db, progress_callback=on_progress)
+    assert p.is_complete is True
+    assert p.total_found == 2
+    assert p.processed_count == 1  # photo_stay was processed
+    assert p.missing_count == 1
+    assert str(file_new_vanish.resolve()) in p.missing_files
+    assert p.error_count == 0
+
+    with db_session(temp_db) as conn:
+        assert repository.count_images(conn) == 1
+        images = repository.list_images(conn)
+        assert images[0]["file_name"] == "photo_stay.jpg"
+
+
+def test_scan_filenotfound_when_source_image_exists_treated_as_error(tmp_path: Path, temp_db: Path, monkeypatch):
+    """
+    Verifies that if a FileNotFoundError is raised by something OTHER than the
+    source image disappearing (e.g. missing thumbnail dependency/directory),
+    while the source image actually still exists:
+    1. It is NOT classified as a missing file (missing_count is not incremented).
+    2. It IS classified as an error (error_count incremented, error recorded).
+    """
+    from PIL import Image
+    import backend.core.scanner as scanner_module
+
+    img_dir = tmp_path / "photos"
+    img_dir.mkdir()
+    valid_file = img_dir / "valid_image.jpg"
+    Image.new("RGB", (50, 50), "green").save(valid_file)
+
+    # Monkeypatch generate_thumbnail to raise FileNotFoundError for an internal asset
+    def faulty_thumb(*args, **kwargs):
+        raise FileNotFoundError("Missing internal thumbnail asset or directory")
+
+    monkeypatch.setattr(scanner_module, "generate_thumbnail", faulty_thumb)
+
+    p = scan_directory(str(img_dir), db_path=temp_db)
+
+    # Source file still exists on disk!
+    assert valid_file.exists()
+
+    # Must be classified as an error, NOT a transient missing source file
+    assert p.missing_count == 0
+    assert p.error_count == 1
+    assert any("valid_image.jpg" in err for err in p.errors)
